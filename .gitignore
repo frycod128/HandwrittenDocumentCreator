@@ -1,2 +1,9 @@
 /.venv
+/.venv-gui
+/.wheelhouse
 /.idea
+/__pycache__/
+/**/__pycache__/
+/output/
+/*.part.pdf
+/gfont-search.html
