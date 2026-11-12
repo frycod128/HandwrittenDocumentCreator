@@ -1,0 +1,7 @@
+数字化时代，文字不只承担记录信息的功能，也承载着书写者的节奏、停顿与温度。机器可以在一瞬间排出成千上万个字符，却很难自然复现纸面上轻微的重心偏移、笔画之间的呼吸感，以及每个字独立出现时的细小差异。
+
+本项目读取一段中英文混合长文本，并从所选的手写字体中为每个字符随机选择字形。每个字围绕自身中心随机旋转 -10° 到 +10°，同时沿横向和纵向做不超过字高 5% 的随机位移。整份内容固定排在 A3 横向纸张的两栏中，每栏的行数由输入参数决定，字号随页面高度自动适配。
+
+Handwriting is personal. A carefully placed letter can look calm, while a slightly tilted stroke may make the same sentence feel lively. The generator preserves this subtle variation without changing the source text, punctuation, or paragraph breaks.
+
+当文本量超过一页能容纳的数量时，程序沿左栏、右栏的顺序继续分页。每一个新页面仍保持相同的栏宽、栏间距、行距和页边距，因此多页文档可以稳定输出、打印与归档。缺字时不会悄悄删掉内容，而是记录发生次数并使用本机中文字体完成回退，确保全文完整。
