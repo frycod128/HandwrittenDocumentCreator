@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 import pymupdf as fitz
+from docx import Document
 
 from handwriting_doc.gfont import GFont
 from handwriting_doc.layout import build_layout
@@ -88,11 +89,13 @@ class PracticalDensityTests(unittest.TestCase):
         text = (base * 500)[:15_000]
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "stress.pdf"
+            output_docx = Path(directory) / "stress.docx"
             result = generate_document(
                 text,
                 fonts,
                 lines_per_column=52,
                 output_pdf=output,
+                output_docx=output_docx,
                 seed=20261112,
             )
             self.assertEqual(
@@ -117,6 +120,13 @@ class PracticalDensityTests(unittest.TestCase):
                     page.rect.height - margin + 1,
                 )
             pdf.close()
+            word = Document(output_docx)
+            self.assertEqual(len(word.inline_shapes), result.page_count)
+            page_breaks = word.element.xpath(".//w:br[@w:type='page']")
+            self.assertEqual(len(page_breaks), result.page_count - 1)
+            for paragraph in word.paragraphs:
+                if paragraph._element.xpath(".//w:br[@w:type='page']"):
+                    self.assertTrue(paragraph._element.xpath(".//w:drawing"))
 
 
 if __name__ == "__main__":

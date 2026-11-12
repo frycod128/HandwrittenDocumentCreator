@@ -7,7 +7,7 @@ from pathlib import Path
 import pymupdf as fitz
 from docx import Document
 from docx.enum.section import WD_ORIENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_LINE_SPACING
 from docx.shared import Mm
 
 
@@ -54,7 +54,9 @@ def export_pdf_pages_to_docx(
                 height=section.page_height,
             )
             if index < pdf.page_count - 1:
-                document.add_page_break()
+                # A break run in the same paragraph avoids Word creating an
+                # extra empty paragraph between full-page images.
+                paragraph.add_run().add_break(WD_BREAK.PAGE)
 
         document.core_properties.title = "A3 随机手写字体文档"
         document.core_properties.subject = "A3 横向双栏逐字随机手写排版"
