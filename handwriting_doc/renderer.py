@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from reportlab.lib.colors import HexColor
+from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen.canvas import Canvas
@@ -74,7 +75,8 @@ def _draw_glyph(
     scale = font_size / reference_size
     x_min, _, x_max, _ = styled.glyph.bounds
     glyph_center_x = (x_min + x_max) / 2
-    line_width = max(0.24, font_size * 0.017)
+    # Keep the pen width physical and independent of the adaptive font size.
+    line_width = 0.5 * mm
 
     canvas.saveState()
     canvas.translate(center_x + styled.offset_x, center_y + styled.offset_y)
@@ -90,7 +92,7 @@ def _draw_glyph(
             canvas.circle(
                 (x - glyph_center_x) * scale,
                 -(y - reference_y) * scale,
-                line_width * 0.55,
+                line_width / 2,
                 stroke=0,
                 fill=1,
             )

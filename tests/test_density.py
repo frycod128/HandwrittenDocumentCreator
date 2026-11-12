@@ -78,6 +78,38 @@ class PracticalDensityTests(unittest.TestCase):
         expected = "".join(char for char in text if not char.isspace())
         self.assertEqual(rendered, expected)
 
+    def test_stroke_width_is_always_half_a_millimeter(self) -> None:
+        fonts = [
+            FONT_DIR / "常用_kvenjoy_美文.gfont",
+            FONT_DIR / "楷体_kvenjoy_大孔龙.gfont",
+        ]
+        expected_width = 0.5 / 25.4 * 72
+        with tempfile.TemporaryDirectory() as directory:
+            for lines in (46, 58):
+                output = Path(directory) / f"stroke_{lines}.pdf"
+                generate_document(
+                    "线宽测试 Stroke width test。" * 120,
+                    fonts,
+                    lines_per_column=lines,
+                    output_pdf=output,
+                    seed=lines,
+                )
+                pdf = fitz.open(output)
+                widths = [
+                    drawing["width"]
+                    for page in pdf
+                    for drawing in page.get_drawings()
+                    if drawing["width"] > 0
+                ]
+                self.assertTrue(widths)
+                self.assertTrue(
+                    all(
+                        abs(width - expected_width) < 0.002
+                        for width in widths
+                    )
+                )
+                pdf.close()
+
     def test_15000_mixed_characters_at_52_lines(self) -> None:
         fonts = [
             FONT_DIR / "常用_kvenjoy_美文.gfont",
