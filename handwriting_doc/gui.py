@@ -7,7 +7,12 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 
-from .gfont import FontInfo, discover_fonts
+from PIL import Image, ImageDraw, ImageTk
+from reportlab.lib.units import mm
+
+from .gfont import FontInfo, GFont, discover_fonts
+from .layout import build_metrics
+from .preview import build_preview_geometry
 from .renderer import GenerationResult, generate_document
 
 
@@ -18,8 +23,14 @@ class HandwritingApp:
         self.font_dir = font_dir
         self.font_infos: list[FontInfo] = []
         self.font_by_iid: dict[str, FontInfo] = {}
+        self.info_by_path: dict[str, FontInfo] = {}
         self.selected_paths: set[str] = set()
-        self._restoring_selection = False
+        self.selection_history: list[str] = []
+        self._preview_font: GFont | None = None
+        self._preview_path: str | None = None
+        self._preview_resize_job: str | None = None
+        self._preview_guard = False
+        self._font_scan_thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
         self._last_result: GenerationResult | None = None
 
@@ -32,6 +43,8 @@ class HandwritingApp:
         self.pdf_var = tk.BooleanVar(value=True)
         self.docx_var = tk.BooleanVar(value=True)
         self.search_var = tk.StringVar()
+        self.preview_char_var = tk.StringVar(value="中")
+        self.preview_font_var = tk.StringVar(value="尚未勾选字体")
         self.character_count_var = tk.StringVar(value="0 字符")
         self.font_summary_var = tk.StringVar(value="正在扫描字体...")
         self.selected_summary_var = tk.StringVar(value="已选 0 种")
@@ -39,12 +52,17 @@ class HandwritingApp:
         self._configure_window()
         self._build_styles()
         self._build_ui()
+        self.preview_char_var.trace_add("write", self._on_preview_char_changed)
         self.root.after(60, self._load_fonts_async)
 
     def _configure_window(self) -> None:
         self.root.title("A3 随机手写字体文档生成器")
-        self.root.geometry("1280x860")
-        self.root.minsize(1040, 720)
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        width = min(1320, screen_width - 80)
+        height = min(920, screen_height - 110)
+        self.root.geometry(f"{width}x{height}")
+        self.root.minsize(min(1100, width), min(740, height))
         self.root.configure(bg="#f4f2ec")
 
     def _build_styles(self) -> None:
@@ -58,9 +76,34 @@ class HandwritingApp:
         self.style.configure("Primary.TButton", font=("Microsoft YaHei UI", 11, "bold"))
         self.style.configure("Treeview", rowheight=27)
         self.style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 10, "bold"))
+        self._checked_icon = self._make_check_icon(checked=True)
+        self._unchecked_icon = self._make_check_icon(checked=False)
+
+    @staticmethod
+    def _make_check_icon(checked: bool) -> ImageTk.PhotoImage:
+        image = Image.new("RGBA", (20, 20), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        if checked:
+            draw.rounded_rectangle(
+                (1, 1, 18, 18),
+                radius=4,
+                fill="#168de2",
+                outline="#0878c7",
+                width=1,
+            )
+            draw.line((5, 10, 8, 14, 15, 6), fill="white", width=2, joint="curve")
+        else:
+            draw.rounded_rectangle(
+                (1, 1, 18, 18),
+                radius=4,
+                fill="#ffffff",
+                outline="#8b8b8b",
+                width=1,
+            )
+        return ImageTk.PhotoImage(image)
 
     def _build_ui(self) -> None:
-        header = tk.Frame(self.root, bg="#18332f", padx=24, pady=18)
+        header = tk.Frame(self.root, bg="#18332f", padx=24, pady=12)
         header.pack(fill="x")
         ttk.Label(
             header,
@@ -77,7 +120,7 @@ class HandwritingApp:
             background="#18332f",
         ).pack(anchor="w", pady=(4, 0))
 
-        body = tk.Frame(self.root, bg="#f4f2ec", padx=18, pady=14)
+        body = tk.Frame(self.root, bg="#f4f2ec", padx=18, pady=10)
         body.pack(fill="both", expand=True)
         body.columnconfigure(0, weight=1)
         body.columnconfigure(1, weight=0, minsize=430)
@@ -100,6 +143,7 @@ class HandwritingApp:
             text_shell,
             wrap="word",
             undo=True,
+            height=12,
             spacing1=2,
             spacing3=3,
             font=("Microsoft YaHei UI", 11),
@@ -167,45 +211,99 @@ class HandwritingApp:
         fonts = ttk.LabelFrame(right, text=" 字体选择 ", style="Section.TLabelframe")
         fonts.grid(row=1, column=0, sticky="nsew")
         fonts.columnconfigure(0, weight=1)
-        fonts.rowconfigure(2, weight=1)
+        fonts.rowconfigure(3, weight=1)
         search_row = tk.Frame(fonts, bg="#f4f2ec")
         search_row.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
-        search_row.columnconfigure(0, weight=1)
-        ttk.Entry(search_row, textvariable=self.search_var).grid(row=0, column=0, sticky="ew")
+        search_row.columnconfigure(1, weight=1)
+        ttk.Label(search_row, text="搜索文件名").grid(row=0, column=0, padx=(0, 6))
+        ttk.Entry(search_row, textvariable=self.search_var).grid(row=0, column=1, sticky="ew")
+        ttk.Button(search_row, text="刷新", width=6, command=self._load_fonts_async).grid(
+            row=0, column=2, padx=(6, 0)
+        )
         self.search_var.trace_add("write", lambda *_: self._refresh_font_tree())
         action_row = tk.Frame(fonts, bg="#f4f2ec")
         action_row.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
         ttk.Label(action_row, textvariable=self.font_summary_var).pack(side="left")
         ttk.Label(action_row, textvariable=self.selected_summary_var).pack(side="right")
+
+        preview_frame = tk.Frame(
+            fonts,
+            bg="#e9ede8",
+            highlightthickness=1,
+            highlightbackground="#cbd4cc",
+        )
+        preview_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(3, 7))
+        preview_frame.columnconfigure(0, weight=1)
+        preview_info = tk.Frame(preview_frame, bg="#e9ede8")
+        preview_info.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        preview_title = tk.Frame(preview_info, bg="#e9ede8")
+        preview_title.pack(fill="x", anchor="w")
+        ttk.Label(preview_title, text="单字预览").pack(side="left")
+        tk.Entry(
+            preview_title,
+            textvariable=self.preview_char_var,
+            width=3,
+            justify="center",
+            font=("Microsoft YaHei UI", 16, "bold"),
+            relief="solid",
+            borderwidth=1,
+        ).pack(side="left", padx=7)
+        ttk.Label(
+            preview_info,
+            textvariable=self.preview_font_var,
+            foreground="#526158",
+            wraplength=250,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
+        self.preview_canvas = tk.Canvas(
+            preview_frame,
+            width=96,
+            height=96,
+            bg="#fffefa",
+            highlightthickness=0,
+        )
+        self.preview_canvas.grid(row=0, column=1, sticky="ne", padx=8, pady=8)
+        self.preview_canvas.bind("<Configure>", self._schedule_preview_draw)
+
         tree_shell = tk.Frame(fonts, bg="#ffffff")
-        tree_shell.grid(row=2, column=0, sticky="nsew", padx=10)
+        tree_shell.grid(row=3, column=0, sticky="nsew", padx=10)
         tree_shell.columnconfigure(0, weight=1)
         tree_shell.rowconfigure(0, weight=1)
         self.font_tree = ttk.Treeview(
             tree_shell,
-            columns=("count",),
-            show="headings",
-            selectmode="extended",
-            height=13,
+            columns=("count", "filename"),
+            show="tree headings",
+            selectmode="browse",
+            height=8,
         )
-        self.font_tree.heading("#0", text="字体")
+        self.font_tree.heading("#0", text="选择")
         self.font_tree.heading("count", text="字符数")
-        self.font_tree.column("#0", width=285, minwidth=180, stretch=True)
-        self.font_tree.column("count", width=75, minwidth=60, anchor="e", stretch=False)
+        self.font_tree.heading("filename", text="文件名")
+        self.font_tree.column("#0", width=54, minwidth=50, anchor="center", stretch=False)
+        self.font_tree.column("count", width=70, minwidth=60, anchor="e", stretch=False)
+        self.font_tree.column(
+            "filename",
+            width=270,
+            minwidth=180,
+            anchor="w",
+            stretch=True,
+        )
         font_scroll = ttk.Scrollbar(tree_shell, orient="vertical", command=self.font_tree.yview)
         self.font_tree.configure(yscrollcommand=font_scroll.set)
         self.font_tree.grid(row=0, column=0, sticky="nsew")
         font_scroll.grid(row=0, column=1, sticky="ns")
-        self.font_tree.bind("<<TreeviewSelect>>", self._on_font_selection)
+        self.font_tree.bind("<Button-1>", self._on_font_click)
+        self.font_tree.bind("<Double-1>", self._on_font_double_click)
+        self.font_tree.bind("<space>", self._toggle_focused_font)
         self.font_tree.bind("<Control-a>", self._select_visible_fonts)
         button_row = tk.Frame(fonts, bg="#f4f2ec")
-        button_row.grid(row=3, column=0, sticky="ew", padx=10, pady=8)
+        button_row.grid(row=4, column=0, sticky="ew", padx=10, pady=8)
         ttk.Button(button_row, text="全选当前", command=self._select_visible_fonts).pack(side="left")
         ttk.Button(button_row, text="清空选择", command=self._clear_font_selection).pack(side="left", padx=6)
         ttk.Button(
             button_row,
-            text="恢复推荐字体",
-            command=self._select_recommended_fonts,
+            text="选前 5 种",
+            command=self._select_first_five_fonts,
         ).pack(side="left")
 
         bottom = tk.Frame(right, bg="#f4f2ec")
@@ -225,7 +323,7 @@ class HandwritingApp:
         )
         self.status = tk.Text(
             bottom,
-            height=5,
+            height=1,
             wrap="word",
             relief="flat",
             bg="#e9e6dd",
@@ -263,7 +361,11 @@ class HandwritingApp:
         self._write_log(f"已导入 {Path(path).name}")
 
     def _load_fonts_async(self) -> None:
-        threading.Thread(target=self._scan_fonts, daemon=True).start()
+        if self._font_scan_thread and self._font_scan_thread.is_alive():
+            return
+        self.font_summary_var.set("正在扫描字体素材…")
+        self._font_scan_thread = threading.Thread(target=self._scan_fonts, daemon=True)
+        self._font_scan_thread.start()
 
     def _scan_fonts(self) -> None:
         try:
@@ -279,30 +381,39 @@ class HandwritingApp:
     def _fonts_loaded(self, infos: list[FontInfo]) -> None:
         valid = [info for info in infos if info.available]
         invalid = [info for info in infos if not info.available]
-        self.font_infos = sorted(valid, key=lambda info: info.name.casefold())
-        self.font_summary_var.set(f"{len(self.font_infos)} 种可用")
+        self.font_infos = sorted(valid, key=lambda info: info.path.name.casefold())
+        self.info_by_path = {str(info.path): info for info in self.font_infos}
+        valid_paths = set(self.info_by_path)
+        self.selected_paths.intersection_update(valid_paths)
+        self.selection_history = [
+            path for path in self.selection_history if path in self.selected_paths
+        ]
+        self.font_summary_var.set(
+            f"{len(self.font_infos)} 种可用 · 动态读取"
+        )
         self._refresh_font_tree()
-        self._select_recommended_fonts()
+        if not self.selected_paths:
+            self._select_first_five_fonts()
+        else:
+            self._refresh_preview_font()
         self._write_log(
-            f"已读取 {self.font_dir.name}：{len(self.font_infos)} 种可用字体"
+            f"已从 {self.font_dir} 动态读取 {len(self.font_infos)} 种可用字体"
         )
         if invalid:
             self._write_log(
-                "已排除空/损坏字体：" + "、".join(info.name for info in invalid)
+                "已排除空/损坏字体：" + "、".join(info.path.name for info in invalid)
             )
 
     def _refresh_font_tree(self) -> None:
-        if not hasattr(self, "font_tree") or not self.font_infos:
+        if not hasattr(self, "font_tree"):
             return
-        self._capture_visible_selection()
-        self._restoring_selection = True
         for iid in self.font_tree.get_children():
             self.font_tree.delete(iid)
         self.font_by_iid.clear()
         query = self.search_var.get().strip().casefold()
-        visible_paths: list[str] = []
         for info in self.font_infos:
-            if query and query not in info.name.casefold():
+            filename = info.path.name
+            if query and query not in filename.casefold():
                 continue
             iid = str(info.path)
             self.font_by_iid[iid] = info
@@ -310,71 +421,212 @@ class HandwritingApp:
                 "",
                 "end",
                 iid=iid,
-                text=info.name,
-                values=(f"{info.character_count:,}",),
+                image=(
+                    self._checked_icon
+                    if iid in self.selected_paths
+                    else self._unchecked_icon
+                ),
+                values=(f"{info.character_count:,}", filename),
             )
-            visible_paths.append(iid)
-        selected = [iid for iid in visible_paths if iid in self.selected_paths]
-        if selected:
-            self.font_tree.selection_set(selected)
-        self._restoring_selection = False
         self._update_selected_summary()
 
-    def _capture_visible_selection(self) -> None:
-        if self._restoring_selection or not hasattr(self, "font_tree"):
-            return
-        visible = set(self.font_tree.get_children())
-        self.selected_paths.difference_update(visible)
-        self.selected_paths.update(self.font_tree.selection())
+    def _on_font_click(self, event: tk.Event) -> str | None:
+        row = self.font_tree.identify_row(event.y)
+        column = self.font_tree.identify_column(event.x)
+        if row in self.font_by_iid and column == "#0":
+            self._toggle_font(row)
+            return "break"
+        return None
 
-    def _on_font_selection(self, _event=None) -> None:
-        if self._restoring_selection:
-            return
-        self._capture_visible_selection()
+    def _on_font_double_click(self, event: tk.Event) -> str | None:
+        row = self.font_tree.identify_row(event.y)
+        if row in self.font_by_iid:
+            self._toggle_font(row)
+            return "break"
+        return None
+
+    def _toggle_focused_font(self, _event=None) -> str:
+        row = self.font_tree.focus()
+        if row in self.font_by_iid:
+            self._toggle_font(row)
+        return "break"
+
+    def _toggle_font(self, path: str) -> None:
+        if path in self.selected_paths:
+            self._set_font_checked(path, False)
+        else:
+            self._set_font_checked(path, True)
         self._update_selected_summary()
+        self._refresh_preview_font()
+
+    def _set_font_checked(self, path: str, checked: bool) -> None:
+        if checked:
+            self.selected_paths.add(path)
+            self.selection_history = [
+                item for item in self.selection_history if item != path
+            ]
+            self.selection_history.append(path)
+        else:
+            self.selected_paths.discard(path)
+            self.selection_history = [
+                item for item in self.selection_history if item != path
+            ]
+        if self.font_tree.exists(path):
+            self.font_tree.item(
+                path,
+                image=self._checked_icon if checked else self._unchecked_icon,
+            )
 
     def _update_selected_summary(self) -> None:
         self.selected_summary_var.set(f"已选 {len(self.selected_paths)} 种")
 
     def _select_visible_fonts(self, _event=None) -> str:
         visible = list(self.font_tree.get_children())
-        self.selected_paths.update(visible)
-        self.font_tree.selection_set(visible)
+        for path in visible:
+            if path in self.font_by_iid:
+                self._set_font_checked(path, True)
         self._update_selected_summary()
+        self._refresh_preview_font()
         return "break"
 
     def _clear_font_selection(self) -> None:
         self.selected_paths.clear()
-        self.font_tree.selection_remove(self.font_tree.selection())
+        self.selection_history.clear()
+        for path in self.font_tree.get_children():
+            if self.font_tree.exists(path):
+                self.font_tree.item(path, image=self._unchecked_icon)
         self._update_selected_summary()
+        self._refresh_preview_font()
 
-    def _select_recommended_fonts(self) -> None:
-        keywords = (
-            "常用_kvenjoy_美文",
-            "超连笔快写-3500字",
-            "手写_kvenjoy_杜磊",
-            "楷体_kvenjoy_大孔龙",
-            "乐行书_kvenjoy_乐乐",
-        )
-        chosen: set[str] = set()
-        for keyword in keywords:
-            match = next(
-                (info for info in self.font_infos if keyword.casefold() in info.name.casefold()),
-                None,
+    def _select_first_five_fonts(self) -> None:
+        self.selected_paths.clear()
+        self.selection_history.clear()
+        for info in self.font_infos[:5]:
+            self._set_font_checked(str(info.path), True)
+        self._update_selected_summary()
+        self._refresh_preview_font()
+
+    def _last_selected_font(self) -> FontInfo | None:
+        for path in reversed(self.selection_history):
+            if path in self.selected_paths and path in self.info_by_path:
+                return self.info_by_path[path]
+        return None
+
+    def _close_preview_font(self) -> None:
+        if self._preview_font is not None:
+            self._preview_font.close()
+        self._preview_font = None
+        self._preview_path = None
+
+    def _refresh_preview_font(self) -> None:
+        info = self._last_selected_font()
+        self._close_preview_font()
+        if info is None:
+            self.preview_font_var.set("尚未勾选字体")
+            self._draw_preview()
+            return
+        try:
+            self._preview_font = GFont(info.path)
+        except Exception as exc:
+            self.preview_font_var.set(f"无法读取：{info.path.name}")
+            self._write_log(f"字体预览读取失败: {exc}")
+            self._draw_preview()
+            return
+        self._preview_path = str(info.path)
+        self.preview_font_var.set(info.path.name)
+        self._draw_preview()
+
+    def _on_preview_char_changed(self, *_args) -> None:
+        if self._preview_guard:
+            return
+        value = self.preview_char_var.get().strip()
+        normalized = value[:1]
+        if normalized != self.preview_char_var.get():
+            self._preview_guard = True
+            self.preview_char_var.set(normalized)
+            self._preview_guard = False
+        self._draw_preview()
+
+    def _schedule_preview_draw(self, _event=None) -> None:
+        if not hasattr(self, "preview_canvas"):
+            return
+        if self._preview_resize_job:
+            self.root.after_cancel(self._preview_resize_job)
+        self._preview_resize_job = self.root.after(60, self._draw_preview)
+
+    def _draw_preview(self) -> None:
+        self._preview_resize_job = None
+        if not hasattr(self, "preview_canvas"):
+            return
+        canvas = self.preview_canvas
+        canvas.delete("all")
+        width = max(80, canvas.winfo_width())
+        height = max(80, canvas.winfo_height())
+        char = self.preview_char_var.get().strip()
+        if not char:
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text="输入一个字符进行预览",
+                fill="#777777",
+                font=("Microsoft YaHei UI", 10),
             )
-            if match:
-                chosen.add(str(match.path))
-        if chosen:
-            self.selected_paths = chosen
-            visible = [
-                iid
-                for iid in self.font_tree.get_children()
-                if iid in self.selected_paths
-            ]
-            self._restoring_selection = True
-            self.font_tree.selection_set(visible)
-            self._restoring_selection = False
-            self._update_selected_summary()
+            return
+        if self._preview_font is None:
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text="请先勾选一种字体",
+                fill="#777777",
+                font=("Microsoft YaHei UI", 10),
+            )
+            return
+        if not self._preview_font.supports(char):
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text=f"该字体缺少“{char}”",
+                fill="#a84a3f",
+                font=("Microsoft YaHei UI", 11),
+            )
+            return
+        geometry = build_preview_geometry(
+            self._preview_font,
+            char,
+            width,
+            height,
+            padding=10,
+        )
+        try:
+            preview_font_size = build_metrics(int(self.line_count_var.get())).font_size
+        except (ValueError, TypeError):
+            preview_font_size = build_metrics(52).font_size
+        target_size = max(1.0, min(width - 20, height - 20) * 0.9)
+        preview_stroke = max(
+            1.5,
+            min(12.0, target_size * (0.5 * mm) / preview_font_size),
+        )
+        for segment in geometry.segments:
+            if len(segment) == 1:
+                x, y = segment[0]
+                canvas.create_oval(
+                    x - preview_stroke / 2,
+                    y - preview_stroke / 2,
+                    x + preview_stroke / 2,
+                    y + preview_stroke / 2,
+                    fill="#111111",
+                    outline="",
+                )
+            elif len(segment) >= 2:
+                coordinates = [coordinate for point in segment for coordinate in point]
+                canvas.create_line(
+                    *coordinates,
+                    fill="#111111",
+                    width=preview_stroke,
+                    capstyle=tk.ROUND,
+                    joinstyle=tk.ROUND,
+                    smooth=True,
+                )
 
     def _choose_output_dir(self) -> None:
         selected = filedialog.askdirectory(
@@ -408,7 +660,6 @@ class HandwritingApp:
         if not text.strip():
             messagebox.showwarning("缺少文本", "请先粘贴或导入待排文字。")
             return
-        self._capture_visible_selection()
         selected = sorted(self.selected_paths)
         if not selected:
             messagebox.showwarning("缺少字体", "请至少选择一种手写字体。")
