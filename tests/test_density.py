@@ -78,7 +78,7 @@ class PracticalDensityTests(unittest.TestCase):
         expected = "".join(char for char in text if not char.isspace())
         self.assertEqual(rendered, expected)
 
-    def test_stroke_width_is_always_half_a_millimeter(self) -> None:
+    def test_stroke_has_half_millimeter_bleed_edge(self) -> None:
         fonts = [
             FONT_DIR / "常用_kvenjoy_美文.gfont",
             FONT_DIR / "楷体_kvenjoy_大孔龙.gfont",
@@ -95,19 +95,22 @@ class PracticalDensityTests(unittest.TestCase):
                     seed=lines,
                 )
                 pdf = fitz.open(output)
-                widths = [
-                    drawing["width"]
+                drawings = [
+                    drawing
                     for page in pdf
                     for drawing in page.get_drawings()
                     if drawing["width"] > 0
                 ]
-                self.assertTrue(widths)
-                self.assertTrue(
-                    all(
-                        abs(width - expected_width) < 0.002
-                        for width in widths
-                    )
-                )
+                self.assertTrue(drawings)
+                widths = [drawing["width"] for drawing in drawings]
+                opacities = [
+                    drawing.get("stroke_opacity", 1.0)
+                    for drawing in drawings
+                ]
+                self.assertAlmostEqual(max(widths), expected_width, delta=0.002)
+                self.assertLessEqual(max(widths), expected_width + 0.002)
+                self.assertTrue(any(opacity < 0.5 for opacity in opacities))
+                self.assertTrue(any(opacity > 0.9 for opacity in opacities))
                 pdf.close()
 
     def test_15000_mixed_characters_at_52_lines(self) -> None:

@@ -27,6 +27,14 @@ _FALLBACK_FONT_CANDIDATES = (
     Path("C:/Windows/Fonts/simsun.ttc"),
 )
 _FALLBACK_FONT_NAME = "HandwritingFallbackCJK"
+_INK_COLOR = "#111111"
+# The outermost layer defines the 0.5 mm pen envelope. Narrower, more opaque
+# passes inside it leave a subtle translucent edge similar to ballpoint bleed.
+_INK_LAYERS = (
+    (0.50, 0.18),
+    (0.44, 0.42),
+    (0.36, 0.98),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,26 +83,23 @@ def _draw_glyph(
     scale = font_size / reference_size
     x_min, _, x_max, _ = styled.glyph.bounds
     glyph_center_x = (x_min + x_max) / 2
-    # Keep the pen width physical and independent of the adaptive font size.
-    line_width = 0.5 * mm
-
     canvas.saveState()
     canvas.translate(center_x + styled.offset_x, center_y + styled.offset_y)
     canvas.rotate(styled.angle)
-    canvas.setStrokeColor(HexColor("#111111"))
-    canvas.setFillColor(HexColor("#111111"))
-    canvas.setLineWidth(line_width)
+    canvas.setStrokeColor(HexColor(_INK_COLOR))
+    canvas.setFillColor(HexColor(_INK_COLOR))
     canvas.setLineCap(1)
     canvas.setLineJoin(1)
+    paths = []
+    dots = []
     for segment in styled.glyph.segments:
         if len(segment) == 1:
             x, y = segment[0]
-            canvas.circle(
-                (x - glyph_center_x) * scale,
-                -(y - reference_y) * scale,
-                line_width / 2,
-                stroke=0,
-                fill=1,
+            dots.append(
+                (
+                    (x - glyph_center_x) * scale,
+                    -(y - reference_y) * scale,
+                )
             )
             continue
         path = canvas.beginPath()
@@ -105,7 +110,18 @@ def _draw_glyph(
                 path.moveTo(px, py)
             else:
                 path.lineTo(px, py)
-        canvas.drawPath(path, stroke=1, fill=0)
+        paths.append(path)
+    for width_mm, opacity in _INK_LAYERS:
+        line_width = width_mm * mm
+        canvas.setLineWidth(line_width)
+        canvas.setStrokeAlpha(opacity)
+        canvas.setFillAlpha(opacity)
+        for path in paths:
+            canvas.drawPath(path, stroke=1, fill=0)
+        for x, y in dots:
+            canvas.circle(x, y, line_width / 2, stroke=0, fill=1)
+    canvas.setStrokeAlpha(1)
+    canvas.setFillAlpha(1)
     canvas.restoreState()
 
 

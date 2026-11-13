@@ -606,27 +606,36 @@ class HandwritingApp:
             1.5,
             min(12.0, target_size * (0.5 * mm) / preview_font_size),
         )
-        for segment in geometry.segments:
-            if len(segment) == 1:
-                x, y = segment[0]
-                canvas.create_oval(
-                    x - preview_stroke / 2,
-                    y - preview_stroke / 2,
-                    x + preview_stroke / 2,
-                    y + preview_stroke / 2,
-                    fill="#111111",
-                    outline="",
-                )
-            elif len(segment) >= 2:
-                coordinates = [coordinate for point in segment for coordinate in point]
-                canvas.create_line(
-                    *coordinates,
-                    fill="#111111",
-                    width=preview_stroke,
-                    capstyle=tk.ROUND,
-                    joinstyle=tk.ROUND,
-                    smooth=True,
-                )
+        preview_layers = (
+            (1.0, "#b7b7b7"),
+            (0.88, "#666666"),
+            (0.72, "#111111"),
+        )
+        for width_factor, color in preview_layers:
+            layer_width = preview_stroke * width_factor
+            for segment in geometry.segments:
+                if len(segment) == 1:
+                    x, y = segment[0]
+                    canvas.create_oval(
+                        x - layer_width / 2,
+                        y - layer_width / 2,
+                        x + layer_width / 2,
+                        y + layer_width / 2,
+                        fill=color,
+                        outline="",
+                    )
+                elif len(segment) >= 2:
+                    coordinates = [
+                        coordinate for point in segment for coordinate in point
+                    ]
+                    canvas.create_line(
+                        *coordinates,
+                        fill=color,
+                        width=layer_width,
+                        capstyle=tk.ROUND,
+                        joinstyle=tk.ROUND,
+                        smooth=True,
+                    )
 
     def _choose_output_dir(self) -> None:
         selected = filedialog.askdirectory(
