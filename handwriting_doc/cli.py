@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import sys
 from pathlib import Path
 
 from .gfont import discover_fonts
+from .paths import default_output_dir
 from .renderer import generate_document
 
 
@@ -87,8 +89,8 @@ def run_cli(args: argparse.Namespace) -> int:
         if pdf_path.suffix.lower() != ".pdf":
             pdf_path = pdf_path.with_suffix(".pdf")
     else:
-        timestamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
-        pdf_path = PROJECT_ROOT / "output" / f"手写文档_{timestamp}.pdf"
+        timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_path = default_output_dir(PROJECT_ROOT) / f"手写文档_{timestamp}.pdf"
 
     docx_path = None
     if args.docx:

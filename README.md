@@ -32,6 +32,10 @@ python tools/bootstrap.py --python D:\Python311\python.exe   # 指定基础解�
 - A3 横向 PDF：矢量笔画，逐字变换完全准确。
 - A3 横向 DOCX：每页以高清图片嵌入，版式与 PDF 一致。Word 对“数万个独立旋转字符”的原生支持不稳定，因此 Word 版采用页面图。
 
+## 输出位置
+
+默认输出目录是当前计算机的“下载”文件夹：Windows 依次通过 Known Folder API 和注册表解析（支持被重定向到其他磁盘），其他系统读取 XDG `user-dirs.dirs`；都不可用时退回项目内的 `output/`。界面里可以随时改成别的目录；命令行省略 `--output` 时也写入这个默认目录。
+
 ## 命令行
 
 ```powershell

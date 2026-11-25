@@ -12,6 +12,7 @@ from reportlab.lib.units import mm
 
 from .gfont import FontInfo, GFont, discover_fonts
 from .layout import build_metrics
+from .paths import default_output_dir
 from .preview import build_preview_geometry
 from .renderer import GenerationResult, generate_document
 
@@ -36,7 +37,7 @@ class HandwritingApp:
 
         self.line_count_var = tk.StringVar(value="52")
         self.seed_var = tk.StringVar()
-        self.output_dir_var = tk.StringVar(value=str(project_root / "output"))
+        self.output_dir_var = tk.StringVar(value=str(default_output_dir(project_root)))
         self.base_name_var = tk.StringVar(
             value=f"手写文档_{dt.datetime.now():%Y%m%d_%H%M%S}"
         )
