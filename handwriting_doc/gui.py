@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 import threading
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -15,6 +16,18 @@ from .layout import build_metrics
 from .paths import default_output_dir
 from .preview import build_preview_geometry
 from .renderer import GenerationResult, generate_document
+from .settings import (
+    CURRENT_VERSION,
+    SettingsLoad,
+    default_config,
+    load_or_create,
+    save_settings,
+    settings_path,
+)
+
+
+_AUTO_BASE_NAME = re.compile(r"^手写文档_\d{8}_\d{6}$")
+_SETTINGS_DEBOUNCE_MS = 400
 
 
 class HandwritingApp:
@@ -34,10 +47,18 @@ class HandwritingApp:
         self._font_scan_thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
         self._last_result: GenerationResult | None = None
+        self.settings_path = settings_path(project_root)
+        self._settings_job: str | None = None
+        self._settings_warning_shown = False
+        self._pending_fonts: list[str] | None = None
+        self._preselect_fonts = True
+        self._fonts_ready = False
+        self._saved_font_keys: list[str] = []
 
+        initial_output_dir = default_output_dir(project_root)
         self.line_count_var = tk.StringVar(value="52")
         self.seed_var = tk.StringVar()
-        self.output_dir_var = tk.StringVar(value=str(default_output_dir(project_root)))
+        self.output_dir_var = tk.StringVar(value=str(initial_output_dir))
         self.base_name_var = tk.StringVar(
             value=f"手写文档_{dt.datetime.now():%Y%m%d_%H%M%S}"
         )
@@ -53,7 +74,10 @@ class HandwritingApp:
         self._configure_window()
         self._build_styles()
         self._build_ui()
+        self._load_settings(initial_output_dir)
+        self._watch_settings()
         self.preview_char_var.trace_add("write", self._on_preview_char_changed)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(60, self._load_fonts_async)
 
     def _configure_window(self) -> None:
@@ -393,10 +417,11 @@ class HandwritingApp:
             f"{len(self.font_infos)} 种可用 · 动态读取"
         )
         self._refresh_font_tree()
-        if not self.selected_paths:
-            self._select_first_five_fonts()
-        else:
-            self._refresh_preview_font()
+        pending, self._pending_fonts = self._pending_fonts or [], None
+        self._apply_saved_fonts(pending, preselect=self._preselect_fonts)
+        self._preselect_fonts = False
+        self._fonts_ready = True
+        self._flush_settings()
         self._write_log(
             f"已从 {self.font_dir} 动态读取 {len(self.font_infos)} 种可用字体"
         )
@@ -404,6 +429,133 @@ class HandwritingApp:
             self._write_log(
                 "已排除空/损坏字体：" + "、".join(info.path.name for info in invalid)
             )
+
+    def _load_settings(self, initial_output_dir: Path) -> None:
+        """读取（必要时创建）项目根配置，并把它套用到界面控件上。"""
+        defaults = default_config(initial_output_dir)
+        try:
+            loaded = load_or_create(self.settings_path, defaults)
+        except OSError as exc:
+            loaded = SettingsLoad(dict(defaults), "unavailable")
+            self._write_log(f"无法读写配置文件 {self.settings_path.name}：{exc}")
+        config = loaded.config
+        self.line_count_var.set(str(config["line_count"]))
+        self.seed_var.set(config["seed"])
+        self.output_dir_var.set(config["output_dir"])
+        base_name = str(config["base_name"]).strip()
+        if not base_name or _AUTO_BASE_NAME.match(base_name):
+            # 自动生成的默认文件名不跨会话沿用，避免覆盖上一次的输出。
+            base_name = f"手写文档_{dt.datetime.now():%Y%m%d_%H%M%S}"
+        self.base_name_var.set(base_name)
+        self.pdf_var.set(bool(config["pdf"]))
+        self.docx_var.set(bool(config["docx"]))
+        self.search_var.set(config["search"])
+        self.preview_char_var.set(config["preview_char"])
+        self._pending_fonts = list(config["selected_fonts"])
+        self._saved_font_keys = list(config["selected_fonts"])
+        self._preselect_fonts = loaded.status in {"created", "repaired"}
+        if loaded.status == "created":
+            self._write_log(f"已创建配置文件：{self.settings_path.name}")
+        elif loaded.status == "repaired":
+            self._write_log("配置文件不完整或已损坏，已重建为默认设置")
+        elif loaded.status == "loaded":
+            self._write_log(f"已载入界面设置：{self.settings_path.name}")
+
+    def _watch_settings(self) -> None:
+        for variable in (
+            self.line_count_var,
+            self.seed_var,
+            self.output_dir_var,
+            self.base_name_var,
+            self.pdf_var,
+            self.docx_var,
+            self.search_var,
+            self.preview_char_var,
+        ):
+            variable.trace_add("write", self._schedule_settings_save)
+
+    def _schedule_settings_save(self, *_args) -> None:
+        if self._settings_job is not None:
+            self.root.after_cancel(self._settings_job)
+        self._settings_job = self.root.after(_SETTINGS_DEBOUNCE_MS, self._write_settings)
+
+    def _font_key(self, path: Path) -> str:
+        """字体在配置里用相对项目根的路径保存，换机器也能用。"""
+        try:
+            return path.resolve().relative_to(self.project_root.resolve()).as_posix()
+        except (ValueError, OSError):
+            return str(path)
+
+    def _resolve_font_key(self, key: str) -> str | None:
+        candidate = Path(key)
+        if not candidate.is_absolute():
+            candidate = self.project_root / key
+        if candidate.is_file():
+            return str(candidate.resolve())
+        wanted = Path(key).name.casefold()
+        for info in self.font_infos:
+            if info.path.name.casefold() == wanted:
+                return str(info.path)
+        return None
+
+    def _apply_saved_fonts(self, keys: list[str], preselect: bool) -> None:
+        selected: list[str] = []
+        for key in keys:
+            resolved = self._resolve_font_key(key)
+            if resolved and resolved not in selected:
+                selected.append(resolved)
+        if not selected and preselect:
+            self._select_first_five_fonts()
+            return
+        self.selected_paths = set(selected)
+        self.selection_history = list(selected)
+        self._refresh_font_tree()
+        self._update_selected_summary()
+        self._refresh_preview_font()
+
+    def _collect_settings(self) -> dict:
+        return {
+            "version": CURRENT_VERSION,
+            "line_count": self.line_count_var.get(),
+            "seed": self.seed_var.get(),
+            "output_dir": self.output_dir_var.get(),
+            "base_name": self.base_name_var.get(),
+            "pdf": bool(self.pdf_var.get()),
+            "docx": bool(self.docx_var.get()),
+            "search": self.search_var.get(),
+            "preview_char": self.preview_char_var.get(),
+            "selected_fonts": self._selected_font_keys(),
+        }
+
+    def _selected_font_keys(self) -> list[str]:
+        # 字体列表尚未扫描完成时保留配置里的选择，避免启动瞬间清空。
+        if not self._fonts_ready:
+            return list(self._saved_font_keys)
+        return [self._font_key(Path(item)) for item in sorted(self.selected_paths)]
+
+    def _flush_settings(self) -> None:
+        """立即写入配置，并取消尚未触发的延迟保存。"""
+        if self._settings_job is not None:
+            self.root.after_cancel(self._settings_job)
+            self._settings_job = None
+        self._write_settings()
+
+    def _write_settings(self) -> None:
+        self._settings_job = None
+        try:
+            save_settings(self.settings_path, self._collect_settings())
+        except ValueError:
+            # 正在编辑的数字/路径还不合法，保留上一份有效配置。
+            pass
+        except OSError as exc:
+            if not self._settings_warning_shown:
+                self._settings_warning_shown = True
+                self._write_log(f"无法保存配置文件：{exc}")
+
+    def _on_close(self) -> None:
+        self._flush_settings()
+        self._close_preview_font()
+        self.root.destroy()
 
     def _refresh_font_tree(self) -> None:
         if not hasattr(self, "font_tree"):
@@ -477,6 +629,7 @@ class HandwritingApp:
                 path,
                 image=self._checked_icon if checked else self._unchecked_icon,
             )
+        self._schedule_settings_save()
 
     def _update_selected_summary(self) -> None:
         self.selected_summary_var.set(f"已选 {len(self.selected_paths)} 种")
