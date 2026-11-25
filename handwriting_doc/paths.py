@@ -155,7 +155,24 @@ def is_writable_directory(path: str | Path) -> bool:
 
 
 def default_output_dir(project_root: str | Path) -> Path:
-    """返回默认输出目录：可用的“下载”文件夹，否则退回项目内 output/。"""
+    """系统默认的“下载”文件夹；不存在且无法创建时退回项目内 output/。
+
+    这里只判断“能否作为默认位置”，不判断是否可写——不可写时由界面询问用户
+    是否提升权限，而不是悄悄换到别的目录。
+    """
+    for path in downloads_candidates():
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        except OSError:
+            continue
+    fallback = Path(project_root) / "output"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+def writable_output_dir(project_root: str | Path) -> Path:
+    """第一个真正可写的候选目录；都不可写时退回项目内 output/。"""
     for path in downloads_candidates():
         try:
             path.mkdir(parents=True, exist_ok=True)

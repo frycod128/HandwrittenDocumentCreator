@@ -17,7 +17,7 @@ from reportlab.lib.units import mm
 from .gfont import FontInfo, GFont, discover_fonts
 from .layout import build_metrics
 from .naming import DEFAULT_BASE_NAME, build_base_name
-from .paths import default_output_dir, is_writable_directory
+from .paths import default_output_dir, is_writable_directory, writable_output_dir
 from .preview import build_preview_geometry
 from .renderer import GenerationResult, generate_document, new_seed
 from .settings import (
@@ -808,8 +808,8 @@ class HandwritingApp:
         self._write_log(f"已重新随机种子：{seed}")
 
     def _fallback_output_dir(self, requested: Path) -> Path | None:
-        """输出目录不可写时改用可写目录；没有可用目录则提示并返回 None。"""
-        fallback = default_output_dir(self.project_root)
+        """改用可写目录，并记住这个选择；没有可用目录则提示并返回 None。"""
+        fallback = writable_output_dir(self.project_root)
         requested_resolved = requested.resolve() if requested.exists() else requested
         if fallback.resolve() == requested_resolved or not is_writable_directory(fallback):
             messagebox.showerror(
@@ -820,9 +820,10 @@ class HandwritingApp:
         messagebox.showwarning(
             "输出目录不可写",
             f"无法写入：{requested}\n\n本次将改为保存到：{fallback}\n"
-            "可在“输出目录”中选择其他有权限的文件夹。",
+            "“输出目录”已同步更新。",
         )
-        self._write_log(f"输出目录不可写，本次改为 {fallback}")
+        self.output_dir_var.set(str(fallback))
+        self._write_log(f"输出目录不可写，已改用 {fallback}")
         return fallback
 
     def _ask_output_permission(self, requested: Path) -> str | None:

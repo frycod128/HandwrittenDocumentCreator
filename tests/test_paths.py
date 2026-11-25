@@ -26,11 +26,32 @@ class DownloadFolderTests(unittest.TestCase):
         self.assertTrue(directory.is_absolute())
         self.assertIn(directory, paths.downloads_candidates())
 
-    def test_default_output_dir_is_writable(self) -> None:
+    def test_default_output_dir_is_one_of_the_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             resolved = paths.default_output_dir(directory)
             self.assertTrue(resolved.is_dir())
-            self.assertTrue(os.access(resolved, os.W_OK))
+            self.assertIn(resolved, paths.downloads_candidates())
+
+    def test_writable_output_dir_skips_unwritable_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            blocker = project / "blocker"
+            blocker.write_text("x", encoding="utf-8")
+            free = project / "free"
+            free.mkdir()
+            candidates = [blocker / "Downloads", free]
+            with mock.patch.object(paths, "downloads_candidates", return_value=candidates):
+                resolved = paths.writable_output_dir(project)
+            self.assertEqual(resolved, free)
+
+    def test_writable_output_dir_falls_back_to_project_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            blocker = project / "blocker"
+            blocker.write_text("x", encoding="utf-8")
+            with mock.patch.object(paths, "downloads_candidates", return_value=[blocker / "Downloads"]):
+                resolved = paths.writable_output_dir(project)
+            self.assertEqual(resolved, project / "output")
 
     def test_is_writable_directory_checks_by_writing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
