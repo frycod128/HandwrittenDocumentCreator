@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ctypes
 import datetime as dt
 import os
 import re
+import sys
+import tempfile
 import threading
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -822,6 +825,108 @@ class HandwritingApp:
         self._write_log(f"输出目录不可写，本次改为 {fallback}")
         return fallback
 
+    def _ask_output_permission(self, requested: Path) -> str | None:
+        """询问用户：提升权限重试、改用可写目录，还是取消。"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("输出目录不可写")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        frame = tk.Frame(dialog, bg="#f4f2ec", padx=18, pady=14)
+        frame.pack(fill="both", expand=True)
+        tk.Label(
+            frame,
+            text="无法写入：",
+            bg="#f4f2ec",
+            fg="#3a3a3a",
+            font=("Microsoft YaHei UI", 10),
+        ).pack(anchor="w")
+        tk.Label(
+            frame,
+            text=str(requested),
+            bg="#f4f2ec",
+            fg="#a84a3f",
+            wraplength=520,
+            justify="left",
+            font=("Microsoft YaHei UI", 9),
+        ).pack(anchor="w", pady=(2, 10))
+        tk.Label(
+            frame,
+            text=(
+                "可以尝试以管理员身份重新启动程序后再生成（会弹出 Windows 授权窗口，"
+                "正文会带过去）；\n也可以改用可写目录，或取消本次操作。"
+            ),
+            bg="#f4f2ec",
+            fg="#4c4a43",
+            justify="left",
+            wraplength=520,
+        ).pack(anchor="w", pady=(0, 12))
+        buttons = tk.Frame(frame, bg="#f4f2ec")
+        buttons.pack(anchor="e")
+        result: dict[str, str | None] = {"value": None}
+
+        def choose(value: str | None) -> None:
+            result["value"] = value
+            dialog.destroy()
+
+        ttk.Button(buttons, text="以管理员身份重试", command=lambda: choose("elevate")).pack(side="left")
+        ttk.Button(buttons, text="改用可写目录", command=lambda: choose("fallback")).pack(side="left", padx=8)
+        ttk.Button(buttons, text="取消", command=lambda: choose(None)).pack(side="left")
+        dialog.protocol("WM_DELETE_WINDOW", lambda: choose(None))
+        dialog.update_idletasks()
+        left = self.root.winfo_rootx() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        top = self.root.winfo_rooty() + (self.root.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{max(0, left)}+{max(0, top)}")
+        dialog.grab_set()
+        self.root.wait_window(dialog)
+        return result["value"]
+
+    def _relaunch_elevated(self, text: str) -> None:
+        """以管理员身份重新启动程序，并把当前正文通过临时文件带过去。"""
+        self._flush_settings()
+        restore = Path(tempfile.gettempdir()) / f"手写文档_正文_{os.getpid()}.txt"
+        try:
+            restore.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror("无法提升权限", f"无法保存临时正文：{exc}")
+            return
+        script = self.project_root / "main.py"
+        parameters = f'"{script}" --gui --restore-text "{restore}"'
+        try:
+            result = ctypes.windll.shell32.ShellExecuteW(
+                None,
+                "runas",
+                sys.executable,
+                parameters,
+                str(self.project_root),
+                1,
+            )
+        except OSError as exc:
+            restore.unlink(missing_ok=True)
+            messagebox.showerror("无法提升权限", f"无法启动管理员实例：{exc}")
+            return
+        if result <= 32:
+            restore.unlink(missing_ok=True)
+            messagebox.showinfo("已取消", "没有获得管理员权限，本次生成已取消。")
+            return
+        self._write_log("已以管理员身份重新启动，正文已保留")
+        self._on_close()
+
+    def restore_text(self, path: str) -> None:
+        """启动时恢复提升权限前保存的正文，并删除临时文件。"""
+        source = Path(path)
+        try:
+            content = source.read_text(encoding="utf-8")
+        except OSError as exc:
+            self._write_log(f"恢复正文失败：{exc}")
+            return
+        try:
+            source.unlink()
+        except OSError:
+            pass
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", content)
+        self._write_log("已恢复以管理员身份重试前的正文")
+
     def _choose_output_dir(self) -> None:
         selected = filedialog.askdirectory(
             title="选择输出目录",
@@ -881,6 +986,12 @@ class HandwritingApp:
         except OSError:
             pass
         if not is_writable_directory(output_dir):
+            choice = self._ask_output_permission(output_dir)
+            if choice == "elevate":
+                self._relaunch_elevated(text)
+                return
+            if choice != "fallback":
+                return
             resolved = self._fallback_output_dir(output_dir)
             if resolved is None:
                 return
@@ -957,7 +1068,9 @@ class HandwritingApp:
         messagebox.showerror("生成失败", message)
 
 
-def launch_gui(project_root: Path, font_dir: Path) -> None:
+def launch_gui(project_root: Path, font_dir: Path, restore_text: str | None = None) -> None:
     root = tk.Tk()
-    HandwritingApp(root, project_root, font_dir)
+    app = HandwritingApp(root, project_root, font_dir)
+    if restore_text:
+        app.restore_text(restore_text)
     root.mainloop()

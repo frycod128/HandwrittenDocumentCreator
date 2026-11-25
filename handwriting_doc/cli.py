@@ -62,6 +62,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--font-dir", default=str(DEFAULT_FONT_DIR), help="字体目录")
     parser.add_argument("--list-fonts", action="store_true", help="仅列出可用字体")
     parser.add_argument("--gui", action="store_true", help="启动图形界面")
+    parser.add_argument("--restore-text", help=argparse.SUPPRESS)
     return parser
 
 
@@ -140,17 +141,18 @@ def run_cli(args: argparse.Namespace) -> int:
 
 def cli_main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    parser = _parser()
     if not argv or "--gui" in argv:
+        args, _unknown = parser.parse_known_args(argv)
         from .gui import launch_gui
 
         try:
-            launch_gui(PROJECT_ROOT, DEFAULT_FONT_DIR)
+            launch_gui(PROJECT_ROOT, DEFAULT_FONT_DIR, restore_text=args.restore_text)
         except Exception as exc:
             print(f"无法启动图形界面: {exc}")
-            print("请双击 run_gui.bat，或使用带 Tcl/Tk 的 .venv-gui 启动。")
+            print("请双击 run_gui.bat，或使用带 Tcl/Tk 的解释器启动。")
             return 3
         return 0
-    parser = _parser()
     args = parser.parse_args(argv)
     try:
         return run_cli(args)
