@@ -16,14 +16,13 @@ Windows 下双击 `run_gui.bat`。首次运行会自动在项目内准备环境�
 2. 都找不到时，把官方独立构建的 Python 3.13 下载到项目内 `.python`（约 47 MB），并按固定 SHA-256 校验；
 3. 用找到的 Python 在项目内创建 `.venv` 并安装 `requirements.txt`。
 
-之后每次启动只做一次快速自检，环境完好就直接打开界面。整个过程只写项目目录（`.venv`、`.python`、`.cache`）：不安装全局包、不修改 PATH、不写注册表，也不影响其他用户。
+之后每次启动只做一次快速自检，环境完好就直接打开界面；已有 `.venv` 时不会重建，只会补齐缺失的依赖。想重建环境时删除 `.venv` 后重新运行即可。整个过程只写项目目录（`.venv`、`.python`、`.cache`）：不安装全局包、不修改 PATH、不写注册表，也不影响其他用户。
 
 其他平台或需要手动控制时：
 
 ```powershell
 python tools/bootstrap.py --launch-gui   # 图形界面
 python tools/bootstrap.py --check        # 只检查环境，不改动文件
-python tools/bootstrap.py --rebuild      # 强制重建 .venv
 python tools/bootstrap.py --python D:\Python311\python.exe   # 指定基础解释器
 ```
 

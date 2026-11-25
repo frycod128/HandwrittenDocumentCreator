@@ -4,7 +4,8 @@
 本文件只使用标准库，因此在依赖安装之前也能运行。它负责：
 
 1. 检查项目内 ``.venv`` 是否健康（解释器可运行、依赖齐全、GUI 需要 Tcl/Tk）；
-2. 必要时用一个项目外的 Python 重建 ``.venv`` 并安装 ``requirements.txt``；
+2. 只有在环境缺失或解释器损坏时，才用项目外的 Python 新建 ``.venv`` 并安装
+   ``requirements.txt``；已有环境只补齐缺失的依赖，不会重建；
 3. 用 ``.venv`` 的解释器启动 ``main.py``。
 
 所有写入都落在项目目录内（``.venv``、``.cache``、``.python``）：不写注册表、
@@ -15,7 +16,6 @@
 
     python tools/bootstrap.py                     # 准备环境并打开图形界面
     python tools/bootstrap.py --check             # 只检查，不改动任何文件
-    python tools/bootstrap.py --rebuild           # 强制重建 .venv
     python tools/bootstrap.py -- --list-fonts     # 用 .venv 运行命令行
     python tools/bootstrap.py --python D:\\Python311\\python.exe
 """
@@ -47,7 +47,6 @@ STATE_FILENAME = ".hdc-env.json"
 MIN_PYTHON = (3, 10)
 CORE_MODULES = ("reportlab", "docx", "pymupdf", "PIL", "fontTools")
 IS_WINDOWS = os.name == "nt"
-CHILD_MARKER = "HDC_BOOTSTRAP_CHILD"
 
 _PROBE_SCRIPT = """
 import importlib.util as util
@@ -97,6 +96,7 @@ class Interpreter:
 @dataclass(frozen=True)
 class Health:
     ok: bool
+    kind: str = ""  # missing | interpreter | deps | tk
     reason: str = ""
     version: str = ""
     missing: tuple[str, ...] = ()
@@ -282,21 +282,21 @@ def viable_bases(need_tk: bool) -> list[Interpreter]:
 def check_environment(venv_dir: Path, need_tk: bool) -> Health:
     """检查项目内虚拟环境是否可以直接使用。"""
     if not (venv_dir / "pyvenv.cfg").is_file():
-        return Health(False, "项目内还没有虚拟环境")
+        return Health(False, "missing", "项目内还没有虚拟环境")
     python = venv_python(venv_dir)
     if not python.is_file():
-        return Health(False, "虚拟环境缺少解释器")
+        return Health(False, "interpreter", "虚拟环境缺少解释器")
     script = _CHECK_TEMPLATE % json.dumps(list(CORE_MODULES))
     data = _run_json([str(python), "-I", "-c", script])
     if not data:
-        return Health(False, "虚拟环境中的解释器无法运行")
+        return Health(False, "interpreter", "虚拟环境中的解释器无法运行")
     missing = tuple(data.get("missing") or ())
     version = ".".join(str(part) for part in data.get("version") or ())
     if missing:
-        return Health(False, "缺少依赖：" + "、".join(missing), version, missing, bool(data.get("tkinter")))
+        return Health(False, "deps", "缺少依赖：" + "、".join(missing), version, missing, bool(data.get("tkinter")))
     if need_tk and not data.get("tkinter"):
-        return Health(False, "虚拟环境缺少 Tcl/Tk，无法打开图形界面", version)
-    return Health(True, "", version, (), bool(data.get("tkinter")))
+        return Health(False, "tk", "虚拟环境缺少 Tcl/Tk，无法打开图形界面", version)
+    return Health(True, "", "", version, (), bool(data.get("tkinter")))
 
 
 def _remove_tree(path: Path) -> None:
@@ -313,7 +313,16 @@ def _remove_tree(path: Path) -> None:
         except OSError:
             raise
 
-    shutil.rmtree(path, onerror=_on_error)
+    # 刚被替换掉的解释器可能还占用着文件，重试几次再放弃。
+    last_error: OSError | None = None
+    for attempt in range(5):
+        try:
+            shutil.rmtree(path, onerror=_on_error)
+            return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.3 * (attempt + 1))
+    raise BootstrapError(f"无法删除旧的虚拟环境 {path}：{last_error}")
 
 
 def create_venv(base: Interpreter, venv_dir: Path) -> None:
@@ -412,46 +421,33 @@ def fetch_portable_python(need_tk: bool) -> Interpreter:
     return interpreter
 
 
-def _reexec_as(base: Interpreter) -> None:
-    """当前解释器就在待重建的 .venv 里时，换一个项目外解释器重来。
-
-    Windows 不允许删除正在运行的 python.exe，所以重建必须由别的解释器执行。
-    """
-    say(f"当前解释器位于待重建的虚拟环境中，改用 {base.executable} 继续")
-    env = _clean_env()
-    env[CHILD_MARKER] = "1"
-    code = subprocess.call(
-        [str(base.executable), str(Path(__file__).resolve()), *sys.argv[1:]],
-        cwd=str(PROJECT_ROOT),
-        env=env,
-    )
-    raise SystemExit(code)
-
-
-def ensure_environment(venv_dir: Path, need_tk: bool, force_rebuild: bool) -> Path:
-    """保证 .venv 可用，返回其解释器路径。"""
+def ensure_environment(venv_dir: Path, need_tk: bool) -> Path:
+    """返回可用的项目内解释器；只有环境缺失或解释器损坏时才新建。"""
     health = check_environment(venv_dir, need_tk)
-    if health.ok and not force_rebuild:
-        digest = requirements_digest()
-        stored = read_state(venv_dir).get("requirements_sha256")
-        if stored and stored != digest:
-            python = venv_python(venv_dir)
-            install_dependencies(python, venv_dir)
-            write_state(venv_dir, python=health.version, rebuilt=False)
-            health = check_environment(venv_dir, need_tk)
-            if not health.ok:
-                raise BootstrapError("依赖更新后自检失败：" + health.reason)
-        elif not stored:
-            write_state(venv_dir, python=health.version)
+    if health.ok:
+        _sync_requirements(venv_dir, health)
         return venv_python(venv_dir)
 
-    say("项目内环境需要初始化：" + (health.reason or "按请求强制重建"))
+    python = venv_python(venv_dir)
+    if health.kind == "deps":
+        say(f"项目内环境缺少依赖，正在补齐：{health.reason}")
+        install_dependencies(python, venv_dir)
+        health = check_environment(venv_dir, need_tk)
+        if not health.ok:
+            raise BootstrapError("依赖安装后自检失败：" + health.reason)
+        write_state(venv_dir, python=health.version, rebuilt=False)
+        return python
+    if health.kind == "tk":
+        raise BootstrapError(
+            "现有虚拟环境缺少 Tcl/Tk。请删除 .venv 后重新运行以自动重建，"
+            "或改用带 Tcl/Tk 的 Python。"
+        )
+
+    say("未找到可用的项目内环境，开始初始化：" + health.reason)
     bases = iter_viable_bases(need_tk)
     first = next(bases, None)
     if first is None:
         first = fetch_portable_python(need_tk)
-    if _inside(Path(sys.executable), venv_dir) and not os.environ.get(CHILD_MARKER):
-        _reexec_as(first)
 
     failure: BootstrapError | None = None
     for base in itertools.chain([first], itertools.islice(bases, 3)):
@@ -470,6 +466,18 @@ def ensure_environment(venv_dir: Path, need_tk: bool, force_rebuild: bool) -> Pa
         return venv_python(venv_dir)
 
     raise BootstrapError(f"无法准备运行环境：{failure or '没有可用的 Python'}")
+
+
+def _sync_requirements(venv_dir: Path, health: Health) -> None:
+    """依赖清单变化时补齐依赖；环境本身不重建。"""
+    digest = requirements_digest()
+    stored = read_state(venv_dir).get("requirements_sha256")
+    if stored and stored != digest:
+        say("requirements.txt 已变化，更新项目内依赖 …")
+        install_dependencies(venv_python(venv_dir), venv_dir)
+        write_state(venv_dir, python=health.version, rebuilt=False)
+    elif not stored:
+        write_state(venv_dir, python=health.version)
 
 
 def launch(python: Path, app_args: Sequence[str]) -> int:
@@ -494,7 +502,6 @@ def main(argv: list[str] | None = None) -> int:
         description="准备项目内运行环境并启动应用（不修改系统全局环境）"
     )
     parser.add_argument("--check", action="store_true", help="只检查环境，不做任何改动")
-    parser.add_argument("--rebuild", action="store_true", help="强制重建项目内虚拟环境")
     parser.add_argument("--launch-gui", action="store_true", help="启动图形界面")
     parser.add_argument("--python", help="指定基础解释器路径")
     parser.add_argument("--venv-dir", default=str(DEFAULT_VENV_DIR), help="虚拟环境目录（默认 .venv）")
@@ -520,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
             if health.missing:
                 print("缺少依赖  : " + "、".join(health.missing))
             return 1
-        python = ensure_environment(venv_dir, need_tk, args.rebuild)
+        python = ensure_environment(venv_dir, need_tk)
         if not app_args:
             app_args = ["--gui"]
         return launch(python, app_args)

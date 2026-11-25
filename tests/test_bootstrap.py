@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import sys
 import tempfile
 import unittest
@@ -64,7 +66,9 @@ class BootstrapTests(unittest.TestCase):
     def test_check_mode_never_creates_a_venv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             venv = Path(directory) / "venv"
-            self.assertEqual(bootstrap.main(["--venv-dir", str(venv), "--check"]), 1)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                code = bootstrap.main(["--venv-dir", str(venv), "--check"])
+            self.assertEqual(code, 1)
             self.assertFalse(venv.exists())
 
 
