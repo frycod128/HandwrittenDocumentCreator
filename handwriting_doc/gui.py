@@ -13,6 +13,7 @@ from reportlab.lib.units import mm
 
 from .gfont import FontInfo, GFont, discover_fonts
 from .layout import build_metrics
+from .naming import DEFAULT_BASE_NAME, build_base_name
 from .paths import default_output_dir
 from .preview import build_preview_geometry
 from .renderer import GenerationResult, generate_document, new_seed
@@ -26,7 +27,7 @@ from .settings import (
 )
 
 
-_AUTO_BASE_NAME = re.compile(r"^手写文档_\d{8}_\d{6}$")
+_LEGACY_BASE_NAME = re.compile(r"^手写文档_\d{8}_\d{6}$")
 _SETTINGS_DEBOUNCE_MS = 400
 
 
@@ -446,9 +447,9 @@ class HandwritingApp:
         self.seed_var.set(config["seed"])
         self.output_dir_var.set(config["output_dir"])
         base_name = str(config["base_name"]).strip()
-        if not base_name or _AUTO_BASE_NAME.match(base_name):
-            # 自动生成的默认文件名不跨会话沿用，避免覆盖上一次的输出。
-            base_name = f"手写文档_{dt.datetime.now():%Y%m%d_%H%M%S}"
+        if not base_name or _LEGACY_BASE_NAME.match(base_name):
+            # 旧版本把当时的时间写死在文件名里，迁移成模板避免反复覆盖同一个文件。
+            base_name = DEFAULT_BASE_NAME
         self.base_name_var.set(base_name)
         self.pdf_var.set(bool(config["pdf"]))
         self.docx_var.set(bool(config["docx"]))
@@ -849,14 +850,19 @@ class HandwritingApp:
             return
         seed_text = self.seed_var.get().strip()
         try:
-            seed = int(seed_text) if seed_text else None
+            seed = int(seed_text) if seed_text else new_seed()
         except ValueError:
             messagebox.showwarning("随机种子无效", "随机种子必须是整数。")
             return
         output_dir = Path(self.output_dir_var.get()).expanduser()
         output_dir.mkdir(parents=True, exist_ok=True)
-        base_name = self.base_name_var.get().strip() or f"手写文档_{dt.datetime.now():%Y%m%d_%H%M%S}"
-        base_name = Path(base_name).stem
+        base_name = build_base_name(
+            self.base_name_var.get(),
+            time=dt.datetime.now(),
+            seed=seed,
+            line_count=lines,
+            fonts_count=len(selected),
+        )
         pdf_path = output_dir / f"{base_name}.pdf"
         docx_path = output_dir / f"{base_name}.docx" if self.docx_var.get() else None
         settings = {

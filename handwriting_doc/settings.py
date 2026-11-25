@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .naming import DEFAULT_BASE_NAME
+
 SETTINGS_FILENAME = "settings.json"
 CURRENT_VERSION = 1
 MAX_LINE_COUNT = 100
@@ -37,7 +39,7 @@ def default_config(default_output_dir: str | Path) -> dict[str, Any]:
         "line_count": "52",
         "seed": "",
         "output_dir": str(default_output_dir),
-        "base_name": "",
+        "base_name": DEFAULT_BASE_NAME,
         "pdf": True,
         "docx": True,
         "search": "",
