@@ -51,6 +51,11 @@ class GenerationResult:
     font_usage: tuple[tuple[str, int], ...]
 
 
+def new_seed() -> int:
+    """生成一个新的随机种子，取值为 0 到 2^31-1。"""
+    return secrets.randbits(31)
+
+
 def _notify(callback: ProgressCallback | None, fraction: float, message: str) -> None:
     if callback is not None:
         callback(max(0.0, min(1.0, fraction)), message)
@@ -249,7 +254,7 @@ def generate_document(
         raise ValueError("输入文本不能为空")
     if not font_paths:
         raise ValueError("至少需要选择一种字体")
-    resolved_seed = seed if seed is not None else secrets.randbits(31)
+    resolved_seed = seed if seed is not None else new_seed()
     rng = random.Random(resolved_seed)
     pdf_path = Path(output_pdf)
     docx_path = Path(output_docx) if output_docx else None

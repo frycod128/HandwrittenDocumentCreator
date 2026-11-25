@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pymupdf as fitz
 
-from handwriting_doc.renderer import generate_document
+from handwriting_doc.renderer import generate_document, new_seed
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -14,6 +14,12 @@ FONT_DIR = ROOT / "字体素材"
 
 
 class RendererTests(unittest.TestCase):
+    def test_new_seed_stays_in_the_documented_range(self) -> None:
+        seeds = {new_seed() for _ in range(20)}
+        self.assertTrue(all(isinstance(seed, int) for seed in seeds))
+        self.assertTrue(all(0 <= seed < 2**31 for seed in seeds))
+        self.assertGreater(len(seeds), 1)
+
     def test_generates_a3_pdf_and_docx(self) -> None:
         fonts = [
             FONT_DIR / "常用_kvenjoy_美文.gfont",

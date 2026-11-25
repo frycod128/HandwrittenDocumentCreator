@@ -15,7 +15,7 @@ from .gfont import FontInfo, GFont, discover_fonts
 from .layout import build_metrics
 from .paths import default_output_dir
 from .preview import build_preview_geometry
-from .renderer import GenerationResult, generate_document
+from .renderer import GenerationResult, generate_document, new_seed
 from .settings import (
     CURRENT_VERSION,
     SettingsLoad,
@@ -213,7 +213,10 @@ class HandwritingApp:
         line_box.grid(row=0, column=1, sticky="w", pady=(10, 5))
         ttk.Label(settings, text="随机种子").grid(row=0, column=2, sticky="e", padx=(12, 5), pady=(10, 5))
         ttk.Entry(settings, width=15, textvariable=self.seed_var).grid(
-            row=0, column=3, sticky="w", padx=(0, 12), pady=(10, 5)
+            row=0, column=3, sticky="w", padx=(0, 6), pady=(10, 5)
+        )
+        ttk.Button(settings, text="重新随机", width=9, command=self._reroll_seed).grid(
+            row=0, column=4, sticky="w", padx=(0, 12), pady=(10, 5)
         )
         ttk.Label(settings, text="输出目录").grid(row=1, column=0, sticky="w", padx=12, pady=4)
         ttk.Entry(settings, textvariable=self.output_dir_var).grid(
@@ -227,7 +230,7 @@ class HandwritingApp:
             row=2, column=1, columnspan=3, sticky="ew", padx=(0, 12), pady=4
         )
         format_frame = tk.Frame(settings, bg="#f4f2ec")
-        format_frame.grid(row=3, column=0, columnspan=4, sticky="w", padx=12, pady=(5, 10))
+        format_frame.grid(row=3, column=0, columnspan=5, sticky="w", padx=12, pady=(5, 10))
         ttk.Checkbutton(format_frame, text="生成 PDF（矢量精确版）", variable=self.pdf_var).pack(side="left")
         ttk.Checkbutton(format_frame, text="同时生成 Word（页面图）", variable=self.docx_var).pack(
             side="left", padx=(16, 0)
@@ -790,6 +793,12 @@ class HandwritingApp:
                         joinstyle=tk.ROUND,
                         smooth=True,
                     )
+
+    def _reroll_seed(self) -> None:
+        """随机换一个种子；输入框变化会按常规流程写入配置。"""
+        seed = new_seed()
+        self.seed_var.set(str(seed))
+        self._write_log(f"已重新随机种子：{seed}")
 
     def _choose_output_dir(self) -> None:
         selected = filedialog.askdirectory(
