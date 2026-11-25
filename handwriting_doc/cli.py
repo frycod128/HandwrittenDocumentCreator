@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from .gfont import discover_fonts
-from .paths import default_output_dir
+from .paths import default_output_dir, is_writable_directory
 from .renderer import generate_document
 
 
@@ -92,6 +92,15 @@ def run_cli(args: argparse.Namespace) -> int:
         timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         pdf_path = default_output_dir(PROJECT_ROOT) / f"手写文档_{timestamp}.pdf"
 
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    if not is_writable_directory(pdf_path.parent):
+        fallback = default_output_dir(PROJECT_ROOT)
+        if is_writable_directory(fallback) and fallback.resolve() != pdf_path.parent.resolve():
+            print(f"输出目录不可写：{pdf_path.parent}，改用 {fallback}")
+            pdf_path = fallback / pdf_path.name
+        else:
+            raise ValueError(f"输出目录不可写：{pdf_path.parent}")
+
     docx_path = None
     if args.docx:
         docx_path = (
@@ -99,6 +108,9 @@ def run_cli(args: argparse.Namespace) -> int:
             if args.docx == "AUTO"
             else Path(args.docx).with_suffix(".docx")
         )
+        docx_path.parent.mkdir(parents=True, exist_ok=True)
+        if not is_writable_directory(docx_path.parent):
+            raise ValueError(f"输出目录不可写：{docx_path.parent}")
 
     def progress(fraction: float, message: str) -> None:
         print(f"[{fraction:>6.1%}] {message}", flush=True)

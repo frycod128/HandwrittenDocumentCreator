@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 # FOLDERID_Downloads，同时是注册表 User Shell Folders 中的值名。
@@ -132,6 +133,27 @@ def default_downloads_dir() -> Path:
     return candidates[0]
 
 
+def is_writable_directory(path: str | Path) -> bool:
+    """通过实际写入一个临时文件判断目录是否可写。
+
+    权限不足、目录不存在、被安全策略拦截时都会返回 False；``os.access``
+    在部分重定向目录或受限进程里并不可靠，所以这里直接试写。
+    """
+    directory = Path(path)
+    if not directory.is_dir():
+        return False
+    probe = directory / f".hdc-write-test-{os.getpid()}-{time.time_ns()}"
+    try:
+        probe.write_bytes(b"")
+    except OSError:
+        return False
+    try:
+        probe.unlink()
+    except OSError:
+        pass
+    return True
+
+
 def default_output_dir(project_root: str | Path) -> Path:
     """返回默认输出目录：可用的“下载”文件夹，否则退回项目内 output/。"""
     for path in downloads_candidates():
@@ -139,7 +161,7 @@ def default_output_dir(project_root: str | Path) -> Path:
             path.mkdir(parents=True, exist_ok=True)
         except OSError:
             continue
-        if path.is_dir() and os.access(path, os.W_OK):
+        if is_writable_directory(path):
             return path
     fallback = Path(project_root) / "output"
     fallback.mkdir(parents=True, exist_ok=True)

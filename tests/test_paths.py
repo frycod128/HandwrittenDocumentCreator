@@ -32,6 +32,17 @@ class DownloadFolderTests(unittest.TestCase):
             self.assertTrue(resolved.is_dir())
             self.assertTrue(os.access(resolved, os.W_OK))
 
+    def test_is_writable_directory_checks_by_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertTrue(paths.is_writable_directory(root))
+            self.assertFalse(paths.is_writable_directory(root / "missing"))
+            blocker = root / "file.txt"
+            blocker.write_text("x", encoding="utf-8")
+            self.assertFalse(paths.is_writable_directory(blocker))
+            leftovers = [item.name for item in root.iterdir() if item.name.startswith(".hdc-write-test")]
+            self.assertEqual(leftovers, [])
+
     def test_falls_back_to_project_output_when_downloads_is_unusable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)

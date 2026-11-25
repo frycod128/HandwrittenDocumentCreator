@@ -14,7 +14,7 @@ from reportlab.lib.units import mm
 from .gfont import FontInfo, GFont, discover_fonts
 from .layout import build_metrics
 from .naming import DEFAULT_BASE_NAME, build_base_name
-from .paths import default_output_dir
+from .paths import default_output_dir, is_writable_directory
 from .preview import build_preview_geometry
 from .renderer import GenerationResult, generate_document, new_seed
 from .settings import (
@@ -464,6 +464,9 @@ class HandwritingApp:
             self._write_log("配置文件不完整或已损坏，已重建为默认设置")
         elif loaded.status == "loaded":
             self._write_log(f"已载入界面设置：{self.settings_path.name}")
+        stored_dir = Path(self.output_dir_var.get()).expanduser()
+        if stored_dir.is_dir() and not is_writable_directory(stored_dir):
+            self._write_log("当前输出目录不可写，生成时会提示改用其他目录。")
 
     def _watch_settings(self) -> None:
         for variable in (
@@ -801,6 +804,24 @@ class HandwritingApp:
         self.seed_var.set(str(seed))
         self._write_log(f"已重新随机种子：{seed}")
 
+    def _fallback_output_dir(self, requested: Path) -> Path | None:
+        """输出目录不可写时改用可写目录；没有可用目录则提示并返回 None。"""
+        fallback = default_output_dir(self.project_root)
+        requested_resolved = requested.resolve() if requested.exists() else requested
+        if fallback.resolve() == requested_resolved or not is_writable_directory(fallback):
+            messagebox.showerror(
+                "输出目录不可写",
+                f"无法写入：{requested}\n\n请把“输出目录”改到有写入权限的文件夹后重试。",
+            )
+            return None
+        messagebox.showwarning(
+            "输出目录不可写",
+            f"无法写入：{requested}\n\n本次将改为保存到：{fallback}\n"
+            "可在“输出目录”中选择其他有权限的文件夹。",
+        )
+        self._write_log(f"输出目录不可写，本次改为 {fallback}")
+        return fallback
+
     def _choose_output_dir(self) -> None:
         selected = filedialog.askdirectory(
             title="选择输出目录",
@@ -855,7 +876,15 @@ class HandwritingApp:
             messagebox.showwarning("随机种子无效", "随机种子必须是整数。")
             return
         output_dir = Path(self.output_dir_var.get()).expanduser()
-        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        if not is_writable_directory(output_dir):
+            resolved = self._fallback_output_dir(output_dir)
+            if resolved is None:
+                return
+            output_dir = resolved
         base_name = build_base_name(
             self.base_name_var.get(),
             time=dt.datetime.now(),
