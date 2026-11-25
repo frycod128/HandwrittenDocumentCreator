@@ -1,6 +1,8 @@
 /.venv
 /.venv-gui
 /.wheelhouse
+/.python/
+/.cache/
 /.idea
 /__pycache__/
 /**/__pycache__/

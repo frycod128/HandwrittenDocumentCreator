@@ -10,21 +10,22 @@
 
 ## 启动
 
+Windows 下双击 `run_gui.bat`。首次运行会自动在项目内准备环境，无需预先安装任何东西（需要联网）：
+
+1. 依次查找项目内 `.python`、项目内 `.venv`、`py -3`、PATH 上的 `python`；
+2. 都找不到时，把官方独立构建的 Python 3.13 下载到项目内 `.python`（约 47 MB），并按固定 SHA-256 校验；
+3. 用找到的 Python 在项目内创建 `.venv` 并安装 `requirements.txt`。
+
+之后每次启动只做一次快速自检，环境完好就直接打开界面。整个过程只写项目目录（`.venv`、`.python`、`.cache`）：不安装全局包、不修改 PATH、不写注册表，也不影响其他用户。
+
+其他平台或需要手动控制时：
+
 ```powershell
-.\.venv-gui\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv-gui\Scripts\python.exe main.py
+python tools/bootstrap.py --launch-gui   # 图形界面
+python tools/bootstrap.py --check        # 只检查环境，不改动文件
+python tools/bootstrap.py --rebuild      # 强制重建 .venv
+python tools/bootstrap.py --python D:\Python311\python.exe   # 指定基础解释器
 ```
-
-也可以双击 `run_gui.bat`。
-
-图形界面需要带 Tcl/Tk 的 Python。项目当前机器上使用：
-
-```powershell
-C:\Users\Admin\AppData\Local\Programs\Python\Python310\python.exe -m venv .venv-gui
-.\.venv-gui\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-命令行生成也继续支持现有 `.venv`。
 
 界面中可粘贴长文本、搜索字体并通过复选框多选、设置每栏行数、随机种子与输出位置。字体列表会动态扫描 `字体素材`，显示复选框、字符数和完整文件名；单字正方形预览始终使用最后勾选的字体。默认同时生成：
 
