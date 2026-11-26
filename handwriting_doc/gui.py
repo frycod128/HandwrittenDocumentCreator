@@ -16,7 +16,7 @@ from reportlab.lib.units import mm
 
 from .gfont import FontInfo, GFont, discover_fonts
 from .layout import build_metrics
-from .naming import DEFAULT_BASE_NAME, build_base_name
+from .naming import DEFAULT_BASE_NAME, build_base_name, build_image_pdf_stem
 from .paths import default_output_dir, is_writable_directory, writable_output_dir
 from .preview import build_preview_geometry
 from .renderer import GenerationResult, generate_document, new_seed
@@ -68,6 +68,7 @@ class HandwritingApp:
         )
         self.pdf_var = tk.BooleanVar(value=True)
         self.docx_var = tk.BooleanVar(value=True)
+        self.image_pdf_var = tk.BooleanVar(value=False)
         self.search_var = tk.StringVar()
         self.preview_char_var = tk.StringVar(value="中")
         self.preview_font_var = tk.StringVar(value="尚未勾选字体")
@@ -235,10 +236,26 @@ class HandwritingApp:
         )
         format_frame = tk.Frame(settings, bg="#f4f2ec")
         format_frame.grid(row=3, column=0, columnspan=5, sticky="w", padx=12, pady=(5, 10))
-        ttk.Checkbutton(format_frame, text="生成 PDF（矢量精确版）", variable=self.pdf_var).pack(side="left")
-        ttk.Checkbutton(format_frame, text="同时生成 Word（页面图）", variable=self.docx_var).pack(
-            side="left", padx=(16, 0)
-        )
+        ttk.Checkbutton(
+            format_frame,
+            text="生成 PDF（矢量精确版）",
+            variable=self.pdf_var,
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Checkbutton(
+            format_frame,
+            text="生成 Word（页面图）",
+            variable=self.docx_var,
+        ).grid(row=0, column=1, sticky="w", padx=(16, 0))
+        ttk.Checkbutton(
+            format_frame,
+            text="生成纯图片 PDF（打印兼容）",
+            variable=self.image_pdf_var,
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(
+            format_frame,
+            text="每页 300 dpi 位图",
+            foreground="#646054",
+        ).grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
 
         fonts = ttk.LabelFrame(right, text=" 字体选择 ", style="Section.TLabelframe")
         fonts.grid(row=1, column=0, sticky="nsew")
@@ -456,6 +473,7 @@ class HandwritingApp:
         self.base_name_var.set(base_name)
         self.pdf_var.set(bool(config["pdf"]))
         self.docx_var.set(bool(config["docx"]))
+        self.image_pdf_var.set(bool(config["image_pdf"]))
         self.search_var.set(config["search"])
         self.preview_char_var.set(config["preview_char"])
         self._pending_fonts = list(config["selected_fonts"])
@@ -464,7 +482,7 @@ class HandwritingApp:
         if loaded.status == "created":
             self._write_log(f"已创建配置文件：{self.settings_path.name}")
         elif loaded.status == "repaired":
-            self._write_log("配置文件不完整或已损坏，已重建为默认设置")
+            self._write_log("配置文件不完整或已损坏，已自动修复")
         elif loaded.status == "loaded":
             self._write_log(f"已载入界面设置：{self.settings_path.name}")
         stored_dir = Path(self.output_dir_var.get()).expanduser()
@@ -479,6 +497,7 @@ class HandwritingApp:
             self.base_name_var,
             self.pdf_var,
             self.docx_var,
+            self.image_pdf_var,
             self.search_var,
             self.preview_char_var,
         ):
@@ -532,6 +551,7 @@ class HandwritingApp:
             "base_name": self.base_name_var.get(),
             "pdf": bool(self.pdf_var.get()),
             "docx": bool(self.docx_var.get()),
+            "image_pdf": bool(self.image_pdf_var.get()),
             "search": self.search_var.get(),
             "preview_char": self.preview_char_var.get(),
             "selected_fonts": self._selected_font_keys(),
@@ -964,8 +984,16 @@ class HandwritingApp:
         if not selected:
             messagebox.showwarning("缺少字体", "请至少选择一种手写字体。")
             return
-        if not self.pdf_var.get() and not self.docx_var.get():
-            messagebox.showwarning("缺少输出格式", "请至少选择 PDF 或 Word。")
+        if not any(
+            (
+                self.pdf_var.get(),
+                self.image_pdf_var.get(),
+                self.docx_var.get(),
+            )
+        ):
+            messagebox.showwarning(
+                "缺少输出格式", "请至少选择 PDF、纯图片 PDF 或 Word。"
+            )
             return
         try:
             lines = int(self.line_count_var.get())
@@ -1005,6 +1033,11 @@ class HandwritingApp:
             fonts_count=len(selected),
         )
         pdf_path = output_dir / f"{base_name}.pdf"
+        image_pdf_path = (
+            output_dir / f"{build_image_pdf_stem(base_name)}.pdf"
+            if self.image_pdf_var.get()
+            else None
+        )
         docx_path = output_dir / f"{base_name}.docx" if self.docx_var.get() else None
         settings = {
             "text": text,
@@ -1012,6 +1045,7 @@ class HandwritingApp:
             "lines": lines,
             "pdf": pdf_path,
             "docx": docx_path,
+            "image_pdf": image_pdf_path,
             "seed": seed,
         }
         self.generate_button.configure(state="disabled")
@@ -1037,6 +1071,7 @@ class HandwritingApp:
                 output_docx=settings["docx"],
                 seed=settings["seed"],
                 progress=progress,
+                output_image_pdf=settings["image_pdf"],
             )
             self.root.after(0, self._generation_finished, result)
         except Exception as exc:
@@ -1057,6 +1092,11 @@ class HandwritingApp:
         details = (
             f"共 {result.page_count} 页\n"
             f"PDF: {result.pdf_path}\n"
+            + (
+                f"纯图片 PDF: {result.image_pdf_path}\n"
+                if result.image_pdf_path
+                else ""
+            )
             + (f"Word: {result.docx_path}\n" if result.docx_path else "")
             + f"随机种子: {result.seed}"
         )

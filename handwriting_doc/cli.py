@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 
 from .gfont import discover_fonts
+from .image_pdf import DEFAULT_IMAGE_PDF_DPI
+from .naming import build_image_pdf_stem
 from .paths import default_output_dir, is_writable_directory
 from .renderer import generate_document
 
@@ -56,7 +58,22 @@ def _parser() -> argparse.ArgumentParser:
         "--docx",
         nargs="?",
         const="AUTO",
-        help="同时生成 Word；只写 --docx 时自动使用 PDF 同名文件",
+        help="生成 Word；只写 --docx 时自动使用 PDF 同名文件",
+    )
+    parser.add_argument(
+        "--image-pdf",
+        nargs="?",
+        const="AUTO",
+        help=(
+            "额外生成纯图片 PDF（逐页栅格化，打印兼容）；"
+            "只写 --image-pdf 时自动使用 PDF 同名文件并加“_纯图片”"
+        ),
+    )
+    parser.add_argument(
+        "--image-pdf-dpi",
+        type=int,
+        default=DEFAULT_IMAGE_PDF_DPI,
+        help=f"纯图片 PDF 的栅格化分辨率，默认 {DEFAULT_IMAGE_PDF_DPI} dpi",
     )
     parser.add_argument("--seed", type=int, help="随机种子；相同输入可复现版式")
     parser.add_argument("--font-dir", default=str(DEFAULT_FONT_DIR), help="字体目录")
@@ -113,6 +130,17 @@ def run_cli(args: argparse.Namespace) -> int:
         if not is_writable_directory(docx_path.parent):
             raise ValueError(f"输出目录不可写：{docx_path.parent}")
 
+    image_pdf_path = None
+    if args.image_pdf:
+        image_pdf_path = (
+            pdf_path.with_name(f"{build_image_pdf_stem(pdf_path.stem)}.pdf")
+            if args.image_pdf == "AUTO"
+            else Path(args.image_pdf).with_suffix(".pdf")
+        )
+        image_pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        if not is_writable_directory(image_pdf_path.parent):
+            raise ValueError(f"输出目录不可写：{image_pdf_path.parent}")
+
     def progress(fraction: float, message: str) -> None:
         print(f"[{fraction:>6.1%}] {message}", flush=True)
 
@@ -124,9 +152,13 @@ def run_cli(args: argparse.Namespace) -> int:
         output_docx=docx_path,
         seed=args.seed,
         progress=progress,
+        output_image_pdf=image_pdf_path,
+        image_pdf_dpi=args.image_pdf_dpi,
     )
     print()
     print(f"PDF : {result.pdf_path}")
+    if result.image_pdf_path:
+        print(f"纯图片PDF: {result.image_pdf_path}")
     if result.docx_path:
         print(f"DOCX: {result.docx_path}")
     print(

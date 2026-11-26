@@ -12,6 +12,7 @@ import re
 DEFAULT_BASE_NAME = "手写文档_{Time}"
 TIME_FORMAT = "%Y%m%d%H%M%S"
 MAX_BASE_NAME_LENGTH = 150
+IMAGE_PDF_SUFFIX = "_纯图片"
 
 _ILLEGAL_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _TRAILING_DOTS_OR_SPACES = re.compile(r"[. ]+$")
@@ -78,3 +79,8 @@ def build_base_name(
             )
         )
     return cleaned[:MAX_BASE_NAME_LENGTH].rstrip(". ")
+
+
+def build_image_pdf_stem(base_name: str) -> str:
+    """纯图片 PDF 的文件名（不含扩展名）：在原文件名后加 ``_纯图片``。"""
+    return f"{base_name}{IMAGE_PDF_SUFFIX}"

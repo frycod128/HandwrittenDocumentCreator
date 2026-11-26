@@ -42,6 +42,7 @@ class SettingsTests(unittest.TestCase):
     def test_wrong_types_are_replaced(self) -> None:
         for mutation in (
             {"pdf": "yes"},
+            {"image_pdf": "yes"},
             {"selected_fonts": "a.gfont"},
             {"seed": "abc"},
             {"output_dir": ""},
@@ -62,6 +63,7 @@ class SettingsTests(unittest.TestCase):
             "base_name": "我的文档",
             "pdf": False,
             "docx": True,
+            "image_pdf": True,
             "search": "楷体",
             "preview_char": "字",
             "selected_fonts": ["字体素材/楷体_kvenjoy_大孔龙.gfont", "字体素材/熊仔.gfont"],
@@ -77,6 +79,23 @@ class SettingsTests(unittest.TestCase):
         loaded = settings.load_or_create(self.path, self.defaults)
         self.assertEqual(loaded.status, "repaired")
         self.assertNotIn("legacy", json.loads(self.path.read_text(encoding="utf-8")))
+
+    def test_legacy_config_without_image_pdf_keeps_other_fields(self) -> None:
+        legacy = dict(self.defaults)
+        legacy.pop("image_pdf")
+        legacy["line_count"] = "46"
+        legacy["selected_fonts"] = ["字体素材/楷体_kvenjoy_大孔龙.gfont"]
+        self.path.write_text(json.dumps(legacy), encoding="utf-8")
+        loaded = settings.load_or_create(self.path, self.defaults)
+        self.assertEqual(loaded.status, "repaired")
+        self.assertFalse(loaded.config["image_pdf"])
+        self.assertEqual(loaded.config["line_count"], "46")
+        self.assertEqual(
+            loaded.config["selected_fonts"],
+            ["字体素材/楷体_kvenjoy_大孔龙.gfont"],
+        )
+        on_disk = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertFalse(on_disk["image_pdf"])
 
     def test_save_rejects_invalid_values_without_touching_file(self) -> None:
         settings.save_settings(self.path, self.defaults)

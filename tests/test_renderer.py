@@ -34,6 +34,7 @@ class RendererTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "test.pdf"
             docx = Path(directory) / "test.docx"
+            image_pdf = Path(directory) / "test_image.pdf"
             result = generate_document(
                 text,
                 fonts,
@@ -41,9 +42,13 @@ class RendererTests(unittest.TestCase):
                 output_pdf=output,
                 output_docx=docx,
                 seed=20261112,
+                output_image_pdf=image_pdf,
+                image_pdf_dpi=72,
             )
             self.assertTrue(output.is_file())
             self.assertTrue(docx.is_file())
+            self.assertTrue(image_pdf.is_file())
+            self.assertEqual(result.image_pdf_path, image_pdf)
             pdf = fitz.open(output)
             self.assertEqual(pdf.page_count, result.page_count)
             rect = pdf[0].rect
@@ -52,7 +57,37 @@ class RendererTests(unittest.TestCase):
             self.assertAlmostEqual(rect.height, 297 / 25.4 * 72, delta=1)
             self.assertGreater(len(pdf[0].get_drawings()), 10)
             pdf.close()
+            image_document = fitz.open(image_pdf)
+            try:
+                self.assertEqual(image_document.page_count, result.page_count)
+                for page in image_document:
+                    self.assertEqual(len(page.get_images()), 1)
+                    self.assertEqual(page.get_drawings(), [])
+                    self.assertEqual(page.get_text(), "")
+            finally:
+                image_document.close()
             self.assertGreater(docx.stat().st_size, 20_000)
+
+    def test_image_pdf_options_are_validated_before_rendering(self) -> None:
+        fonts = [FONT_DIR / "常用_kvenjoy_美文.gfont"]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "test.pdf"
+            image_pdf = Path(directory) / "image.pdf"
+            for options in (
+                {"output_image_pdf": image_pdf, "image_pdf_dpi": 10},
+                {"output_image_pdf": output},
+            ):
+                with self.subTest(options=options):
+                    with self.assertRaises(ValueError):
+                        generate_document(
+                            "测试文本",
+                            fonts,
+                            lines_per_column=52,
+                            output_pdf=output,
+                            **options,
+                        )
+                    self.assertFalse(output.exists())
+                    self.assertFalse(image_pdf.exists())
 
 if __name__ == "__main__":
     unittest.main()

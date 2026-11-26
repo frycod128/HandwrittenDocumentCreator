@@ -66,6 +66,9 @@ class BaseNameTemplateTests(unittest.TestCase):
     def test_seed_is_used_verbatim(self) -> None:
         self.assertEqual(build("{Seed}", seed=0), "0")
 
+    def test_image_pdf_stem_marks_the_print_compatible_copy(self) -> None:
+        self.assertEqual(naming.build_image_pdf_stem("报告"), "报告_纯图片")
+
 
 if __name__ == "__main__":
     unittest.main()

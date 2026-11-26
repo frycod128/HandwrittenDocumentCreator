@@ -42,6 +42,8 @@ def default_config(default_output_dir: str | Path) -> dict[str, Any]:
         "base_name": DEFAULT_BASE_NAME,
         "pdf": True,
         "docx": True,
+        # 旧版本配置没有这个字段；normalize 会把缺失值当作 False 补齐。
+        "image_pdf": False,
         "search": "",
         "preview_char": "中",
         "selected_fonts": [],
@@ -103,7 +105,9 @@ def normalize(raw: Any, order: dict[str, Any]) -> dict[str, Any] | None:
 
     pdf = _as_flag(raw.get("pdf"))
     docx = _as_flag(raw.get("docx"))
-    if pdf is None or docx is None:
+    # image_pdf 是后加的字段：没有该键的旧配置按 False 迁移，而不是整份重建。
+    image_pdf = _as_flag(raw.get("image_pdf", False))
+    if pdf is None or docx is None or image_pdf is None:
         return None
 
     search = _as_text(raw.get("search"))
@@ -133,6 +137,7 @@ def normalize(raw: Any, order: dict[str, Any]) -> dict[str, Any] | None:
         "base_name": base_name,
         "pdf": pdf,
         "docx": docx,
+        "image_pdf": image_pdf,
         "search": search,
         "preview_char": preview_char[:1],
         "selected_fonts": selected,

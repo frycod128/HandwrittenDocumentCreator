@@ -17,6 +17,11 @@ from reportlab.pdfgen.canvas import Canvas
 
 from .docx_export import export_pdf_pages_to_docx
 from .gfont import GFont
+from .image_pdf import (
+    DEFAULT_IMAGE_PDF_DPI,
+    export_pdf_pages_to_image_pdf,
+    validate_image_pdf_dpi,
+)
 from .layout import A3_LANDSCAPE, DocumentLayout, StyledChar, build_layout
 
 
@@ -49,6 +54,7 @@ class GenerationResult:
     fallback_count: int
     missing_characters: tuple[str, ...]
     font_usage: tuple[tuple[str, int], ...]
+    image_pdf_path: Path | None = None
 
 
 def new_seed() -> int:
@@ -249,6 +255,8 @@ def generate_document(
     output_docx: str | Path | None = None,
     seed: int | None = None,
     progress: ProgressCallback | None = None,
+    output_image_pdf: str | Path | None = None,
+    image_pdf_dpi: int = DEFAULT_IMAGE_PDF_DPI,
 ) -> GenerationResult:
     if not text.strip():
         raise ValueError("输入文本不能为空")
@@ -258,6 +266,12 @@ def generate_document(
     rng = random.Random(resolved_seed)
     pdf_path = Path(output_pdf)
     docx_path = Path(output_docx) if output_docx else None
+    image_pdf_path = Path(output_image_pdf) if output_image_pdf else None
+    if image_pdf_path is not None:
+        # 先校验参数，避免排版几分钟后才因路径或 dpi 不合法而失败。
+        validate_image_pdf_dpi(image_pdf_dpi)
+        if image_pdf_path.resolve() == pdf_path.resolve():
+            raise ValueError("纯图片 PDF 不能与矢量 PDF 使用同一个文件")
     fonts: list[GFont] = []
     try:
         _notify(progress, 0.01, "正在读取字体")
@@ -270,8 +284,20 @@ def generate_document(
             f"共 {len(layout.pages)} 页，开始绘制 {layout.total_characters} 个字符",
         )
         fallback_count, usage = render_pdf(layout, pdf_path, resolved_seed, progress)
+        if image_pdf_path is not None:
+            _notify(progress, 0.95, "正在生成纯图片 PDF（逐页栅格化）")
+            export_pdf_pages_to_image_pdf(
+                pdf_path,
+                image_pdf_path,
+                dpi=image_pdf_dpi,
+                progress=lambda done, total: _notify(
+                    progress,
+                    0.95 + 0.03 * done / max(1, total),
+                    f"正在栅格化第 {done}/{total} 页",
+                ),
+            )
         if docx_path is not None:
-            _notify(progress, 0.96, "正在生成 Word 页面")
+            _notify(progress, 0.98, "正在生成 Word 页面")
             export_pdf_pages_to_docx(pdf_path, docx_path)
         _notify(progress, 1.0, "生成完成")
         return GenerationResult(
@@ -285,6 +311,7 @@ def generate_document(
             fallback_count=fallback_count,
             missing_characters=layout.missing_characters,
             font_usage=usage,
+            image_pdf_path=image_pdf_path,
         )
     finally:
         for font in fonts:
