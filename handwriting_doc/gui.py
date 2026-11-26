@@ -1046,6 +1046,7 @@ class HandwritingApp:
             "pdf": pdf_path,
             "docx": docx_path,
             "image_pdf": image_pdf_path,
+            "keep_pdf": bool(self.pdf_var.get()),
             "seed": seed,
         }
         self.generate_button.configure(state="disabled")
@@ -1072,6 +1073,7 @@ class HandwritingApp:
                 seed=settings["seed"],
                 progress=progress,
                 output_image_pdf=settings["image_pdf"],
+                keep_pdf=settings["keep_pdf"],
             )
             self.root.after(0, self._generation_finished, result)
         except Exception as exc:
@@ -1085,13 +1087,15 @@ class HandwritingApp:
             f"完成：{result.page_count} 页，{result.character_count:,} 字符，"
             f"随机种子 {result.seed}"
         )
+        if result.pdf_path is None:
+            self._write_log("按设置未保留矢量 PDF，只保留派生文件")
         if result.fallback_count:
             self._write_log(
                 f"有 {result.fallback_count} 个字符不在所选字体中，已使用系统字体回退。"
             )
         details = (
             f"共 {result.page_count} 页\n"
-            f"PDF: {result.pdf_path}\n"
+            + (f"PDF: {result.pdf_path}\n" if result.pdf_path else "")
             + (
                 f"纯图片 PDF: {result.image_pdf_path}\n"
                 if result.image_pdf_path

@@ -44,7 +44,7 @@ _INK_LAYERS = (
 
 @dataclass(frozen=True, slots=True)
 class GenerationResult:
-    pdf_path: Path
+    pdf_path: Path | None
     docx_path: Path | None
     seed: int
     page_count: int
@@ -65,6 +65,22 @@ def new_seed() -> int:
 def _notify(callback: ProgressCallback | None, fraction: float, message: str) -> None:
     if callback is not None:
         callback(max(0.0, min(1.0, fraction)), message)
+
+
+def _temporary_vector_pdf(pdf_path: Path) -> Path:
+    """不保留矢量 PDF 时使用的临时文件名，避免覆盖目标位置的同名文件。"""
+    return pdf_path.with_name(
+        f".hdc-{os.getpid()}-{secrets.token_hex(4)}.vector.pdf"
+    )
+
+
+def _discard_pdf(path: Path) -> None:
+    """删除临时矢量 PDF，连同绘制中断时可能留下的 .part 文件。"""
+    for candidate in (path, path.with_name(f"{path.stem}.part{path.suffix}")):
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _register_fallback_font() -> str | None:
@@ -257,6 +273,7 @@ def generate_document(
     progress: ProgressCallback | None = None,
     output_image_pdf: str | Path | None = None,
     image_pdf_dpi: int = DEFAULT_IMAGE_PDF_DPI,
+    keep_pdf: bool = True,
 ) -> GenerationResult:
     if not text.strip():
         raise ValueError("输入文本不能为空")
@@ -267,11 +284,15 @@ def generate_document(
     pdf_path = Path(output_pdf)
     docx_path = Path(output_docx) if output_docx else None
     image_pdf_path = Path(output_image_pdf) if output_image_pdf else None
+    if not keep_pdf and image_pdf_path is None and docx_path is None:
+        raise ValueError("取消矢量 PDF 时，必须同时生成纯图片 PDF 或 Word")
     if image_pdf_path is not None:
         # 先校验参数，避免排版几分钟后才因路径或 dpi 不合法而失败。
         validate_image_pdf_dpi(image_pdf_dpi)
-        if image_pdf_path.resolve() == pdf_path.resolve():
+        if keep_pdf and image_pdf_path.resolve() == pdf_path.resolve():
             raise ValueError("纯图片 PDF 不能与矢量 PDF 使用同一个文件")
+    # 不保留矢量 PDF 时也先生成一份临时文件：纯图片 PDF 和 Word 都以它为源。
+    vector_pdf_path = pdf_path if keep_pdf else _temporary_vector_pdf(pdf_path)
     fonts: list[GFont] = []
     try:
         _notify(progress, 0.01, "正在读取字体")
@@ -283,11 +304,13 @@ def generate_document(
             0.12,
             f"共 {len(layout.pages)} 页，开始绘制 {layout.total_characters} 个字符",
         )
-        fallback_count, usage = render_pdf(layout, pdf_path, resolved_seed, progress)
+        fallback_count, usage = render_pdf(
+            layout, vector_pdf_path, resolved_seed, progress
+        )
         if image_pdf_path is not None:
             _notify(progress, 0.95, "正在生成纯图片 PDF（逐页栅格化）")
             export_pdf_pages_to_image_pdf(
-                pdf_path,
+                vector_pdf_path,
                 image_pdf_path,
                 dpi=image_pdf_dpi,
                 progress=lambda done, total: _notify(
@@ -298,10 +321,10 @@ def generate_document(
             )
         if docx_path is not None:
             _notify(progress, 0.98, "正在生成 Word 页面")
-            export_pdf_pages_to_docx(pdf_path, docx_path)
+            export_pdf_pages_to_docx(vector_pdf_path, docx_path)
         _notify(progress, 1.0, "生成完成")
         return GenerationResult(
-            pdf_path=pdf_path,
+            pdf_path=pdf_path if keep_pdf else None,
             docx_path=docx_path,
             seed=resolved_seed,
             page_count=len(layout.pages),
@@ -314,5 +337,7 @@ def generate_document(
             image_pdf_path=image_pdf_path,
         )
     finally:
+        if not keep_pdf:
+            _discard_pdf(vector_pdf_path)
         for font in fonts:
             font.close()

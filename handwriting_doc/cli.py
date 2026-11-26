@@ -156,7 +156,8 @@ def run_cli(args: argparse.Namespace) -> int:
         image_pdf_dpi=args.image_pdf_dpi,
     )
     print()
-    print(f"PDF : {result.pdf_path}")
+    if result.pdf_path:
+        print(f"PDF : {result.pdf_path}")
     if result.image_pdf_path:
         print(f"纯图片PDF: {result.image_pdf_path}")
     if result.docx_path:

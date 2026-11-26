@@ -89,5 +89,60 @@ class RendererTests(unittest.TestCase):
                     self.assertFalse(output.exists())
                     self.assertFalse(image_pdf.exists())
 
+    def test_vector_pdf_is_discarded_when_not_requested(self) -> None:
+        fonts = [FONT_DIR / "常用_kvenjoy_美文.gfont"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "dropped.pdf"
+            image_pdf = root / "dropped_image.pdf"
+            result = generate_document(
+                "只保留纯图片 PDF 的测试文本。",
+                fonts,
+                lines_per_column=52,
+                output_pdf=output,
+                output_image_pdf=image_pdf,
+                image_pdf_dpi=72,
+                seed=3,
+                keep_pdf=False,
+            )
+            self.assertIsNone(result.pdf_path)
+            self.assertFalse(output.exists())
+            self.assertTrue(image_pdf.is_file())
+            self.assertEqual(
+                sorted(item.name for item in root.iterdir()),
+                [image_pdf.name],
+            )
+
+    def test_keep_pdf_false_requires_a_derived_output(self) -> None:
+        fonts = [FONT_DIR / "常用_kvenjoy_美文.gfont"]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "dropped.pdf"
+            with self.assertRaises(ValueError):
+                generate_document(
+                    "测试文本",
+                    fonts,
+                    lines_per_column=52,
+                    output_pdf=output,
+                    keep_pdf=False,
+                )
+            self.assertFalse(output.exists())
+
+    def test_temporary_vector_pdf_is_removed_after_a_failed_export(self) -> None:
+        fonts = [FONT_DIR / "常用_kvenjoy_美文.gfont"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            blocker = root / "blocker"
+            blocker.write_text("not a directory", encoding="utf-8")
+            with self.assertRaises(OSError):
+                generate_document(
+                    "测试文本",
+                    fonts,
+                    lines_per_column=52,
+                    output_pdf=root / "dropped.pdf",
+                    output_docx=blocker / "out.docx",
+                    keep_pdf=False,
+                )
+            self.assertEqual(sorted(item.name for item in root.iterdir()), ["blocker"])
+
 if __name__ == "__main__":
     unittest.main()
